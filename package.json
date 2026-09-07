@@ -1,6 +1,6 @@
 {
   "name": "@fieldwork-ai/codex-transport",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "ChatGPT subscription transport and OAuth for the AI SDK, ported from OpenAI Codex.",
   "type": "module",
   "license": "Apache-2.0",
@@ -10,7 +10,15 @@
   },
   "exports": {
     ".": "./dist/index.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./constants": "./dist/constants.js",
+    "./types": "./dist/types.js",
+    "./oauth": "./dist/oauth.js",
+    "./usage": "./dist/usage.js",
+    "./errors": "./dist/errors.js",
+    "./language-model": "./dist/language-model.js",
+    "./client": "./dist/client.js",
+    "./client-types": "./dist/client-types.js"
   },
   "types": "./dist/index.d.ts",
   "files": [
@@ -36,5 +44,6 @@
     "@types/ws": "^8.18.1",
     "typescript": "~5.9.3",
     "vitest": "^4.1.0"
-  }
+  },
+  "sideEffects": false
 }
