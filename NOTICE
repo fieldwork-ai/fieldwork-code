@@ -1,0 +1,7 @@
+Codex transport protocol port
+Copyright 2026 Fieldwork AI
+
+Protocol implementation derived from OpenAI Codex, Copyright OpenAI, licensed under Apache-2.0.
+Upstream: https://github.com/openai/codex
+Revision: e1eb98461cd42730e7b1a890c3100303d7091bc2
+Sources: codex-rs/core/src/client.rs, codex-rs/codex-api, codex-rs/backend-client.
