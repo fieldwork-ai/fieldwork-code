@@ -1,3 +1,17 @@
+# 0.20.0
+
+Render Markdown in thinking text, separate turns with labeled rules, and group tool inputs and outputs in bordered blocks.
+
+Add awaited device preparation hooks, capability advertisement, and idle-only maintenance callbacks for embedding applications. Preserve legacy directory authorization and reap background processes when an executor closes.
+
+Anchor approval panels and mode pickers directly above the composer, including after resizing and with multiline drafts. Add an **Auto-approve tools** option in approval dialogs, Ctrl+G, and `/approvals on|off` to update the cloud auto-approval setting, display its saved state, and follow resumed turns. If the server only saves the setting, fwcode approves the queued tools in one continuation; plans and calendar-change decisions remain explicit. Escape interrupts a running turn, including while a picker is open. Plans still require explicit approval.
+
+# 0.19.0
+
+Keep submitted messages visible immediately, preserve drafts on rejected sends, and reconcile streaming replies by message ID. Use a full-screen transcript with a fixed composer and status bar. Render shell commands, file contents, edit diffs, plans, and unfamiliar tool arguments as readable approval dialogs. Leave `conversations.auto_approve` under cloud control instead of sending an approval override on every turn.
+
+Add a scripted local HTTP/SSE backend, terminal-emulator interaction tests, a real PTY smoke test, and PNG captures of the rendered terminal cells. CI retains the screenshots for review. Run `pnpm --filter @fieldwork-ai/fieldwork-code tui:demo` to operate the mock-backed interface without an account or model calls.
+
 # 0.18.0
 
 Replace the WebSocket relay with app-hosted SSE execution and HTTP results. fwcode opens the conversation executor directly; Electron starts the same executor from its device control stream. Reject duplicate requests and interrupt foreground work on cancellation or disconnect. Requires the matching app SSE execution API.

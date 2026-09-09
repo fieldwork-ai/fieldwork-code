@@ -3,6 +3,7 @@ import type { UIMessage } from "ai";
 export interface Conversation {
   conversation_id: string;
   model: string;
+  auto_approve?: boolean;
   messages?: UIMessage[];
   next_cursor?: string | null;
   turn_active?: boolean;
@@ -44,4 +45,8 @@ export function messageText(message: UIMessage): string {
 export function terminalText(text: string): string {
   // Strip control bytes before handing server content to a terminal renderer.
   return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+}
+
+export function isUnsentMessage(message: UIMessage): boolean {
+  return (message.metadata as { fwcodeDelivery?: string } | undefined)?.fwcodeDelivery === "failed";
 }

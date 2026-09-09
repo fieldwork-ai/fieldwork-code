@@ -11,7 +11,7 @@ The cloud runs the model loop, defines the full tool catalog, and executes cloud
 
 Version 0.18 requires the app SSE execution API with `runner_sessions` and `runner_requests`.
 
-Inside chat: `/model`, `/codex`, `/logs`, `/compact`, `/stop`, `/approve`, `/deny`, `/older`, `/quit`. `/codex` reuses an existing Fieldwork Codex connection or opens browser OAuth with a temporary localhost callback; after your confirmation, credentials are handed to Fieldwork cloud for encrypted storage and refresh. No model calls run locally.
+Inside chat: `/model`, `/codex`, `/logs`, `/compact`, `/stop`, `/approvals`, `/approve`, `/deny`, `/older`, `/quit`. `/codex` reuses an existing Fieldwork Codex connection or opens browser OAuth with a temporary localhost callback; after your confirmation, credentials are handed to Fieldwork cloud for encrypted storage and refresh. No model calls run locally.
 
 Login lives under `$XDG_CONFIG_HOME/fwcode/config.json` (default `~/.config/fwcode/config.json`). JSONL conversation logs live under `$XDG_STATE_HOME/fwcode/conversations/` (default `~/.local/state/fwcode/conversations/`). Logs persist across logout until you delete them. Cloud history remains authoritative. `FWCODE_API_URL` and `FWCODE_TOKEN` support development environments independently of the asset CLI's `FIELDWORK_*` configuration.
 
@@ -26,6 +26,21 @@ Packages release independently. Bump the changed package, update its changelog, 
 Shared handlers are exposed through `@fieldwork-ai/fieldwork-code/agent/runner` for desktop hosts and `@fieldwork-ai/fieldwork-code/agent/router` for the compute HTTP service. The agent uses `bash` and `tar`, and `rsvg-convert` with installed fonts for rasterized SVGs. On Ubuntu, install `librsvg2-bin fonts-liberation` for the full test suite.
 
 PDF interpretation belongs to the private Fieldwork app. It supplies a bounded read program through the existing process runner, using Poppler on the selected machine; no PDF parser or page-formatting implementation ships in this package.
+
+## TUI development and visual regression checks
+
+The interface uses the terminal's font and ANSI palette. Replies and thinking text render Markdown. Full-width labeled rules separate turns, and bordered tool blocks separate commands from their results. The transcript scrolls independently above a fixed composer and status bar; PgUp/PgDn and the mouse wheel navigate history. Enter sends, Shift+Enter inserts a newline, and Escape stops a running turn. Ctrl+C also stops a running turn and exits when idle. Approval dialogs stay directly above the composer and show the command, file contents, edit diff, or plan; PgUp/PgDn scroll long details, arrows select a decision, Enter confirms, and Escape returns to the draft without deciding and interrupts any running turn. Mode pickers also sit directly above the composer. Choose **Auto-approve tools** in an approval dialog to enable it for the conversation. **Ctrl+G** toggles auto-approval, including from a pending approval panel. `/approvals` opens the mode picker; `/approvals on` and `/approvals off` set it directly. The status bar shows the saved mode. This updates `conversations.auto_approve` in the cloud and follows a resumed turn without sending it again. Explicit plan approvals still require a decision.
+
+```bash
+pnpm --filter @fieldwork-ai/fieldwork-code tui:demo
+pnpm --filter @fieldwork-ai/fieldwork-code test:tui
+```
+
+The demo starts an ephemeral localhost HTTP server and uses the real session, SSE parser, and TUI. Type `thinking`, `shell`, `edit`, `write`, `plan`, `long`, `stream`, or `fail` for deterministic scenarios. It uses an isolated temporary log directory and dummy credentials; it makes no model calls and executes no tools. It is development-only and is excluded from the published package.
+
+The tests drive input bytes through the TUI and feed its actual ANSI output into xterm's headless terminal emulator. A second test launches `ProcessTerminal` in a real POSIX PTY and operates the demo with keyboard input. This test needs Python 3 and is skipped on Windows; the emulator tests run on all platforms. PNGs and matching text frames land in `.logs/tui-screenshots/` at the repository root, or `TUI_SCREENSHOT_DIR` when set. CI uploads them as `tui-screenshots`; failed PTY runs also retain their ANSI recording under `.logs/tui-pty-failure/` locally.
+
+Assertions cover submission, rejection and retry, preserved drafts, cloud-side pending approvals, approval and denial, unknown tool arguments, stopping, interrupted streams, long history, and resize behavior. Screenshots rasterize the terminal emulator's actual cell buffer using a fixed font and palette. They are visual-review artifacts, not pixel-golden comparisons: font rendering differs across platforms. Inspect the PNGs when changing presentation; the assertions alone do not establish visual quality.
 
 ## License
 

@@ -1,6 +1,6 @@
 {
   "name": "@fieldwork-ai/fieldwork-code",
-  "version": "0.18.0",
+  "version": "0.20.0",
   "description": "Fieldwork Code: terminal chat with built-in local tools",
   "license": "(MIT OR Apache-2.0)",
   "type": "module",
@@ -20,7 +20,10 @@
     "build": "node -e \"require('node:fs').rmSync('dist', {recursive:true,force:true})\" && tsc",
     "prepack": "pnpm build",
     "dev": "tsx src/index.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:tui": "vitest run tests/tui.test.ts tests/tui-pty.test.ts",
+    "tui:demo": "tsx tests/tui/demo.ts",
+    "test:tui:live": "vitest run --config vitest.live.config.ts"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.85.1",
@@ -30,6 +33,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@xterm/headless": "6.0.0",
     "tsx": "^4.19.0",
     "typescript": "~5.9.3",
     "vitest": "^4.1.0"

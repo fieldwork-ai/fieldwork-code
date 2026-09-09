@@ -21,6 +21,8 @@ The asset-management `fieldwork` CLI (`@fieldwork-ai/cli`) is distributed separa
 
 Use Node 24 and pnpm 10.32.1. Run `pnpm install --frozen-lockfile`, `pnpm build`, and `pnpm test`.
 
+The [terminal regression harness](packages/code/tests/tui/README.md) drives the TUI through keystrokes, captures screenshots, and includes a live mode against the real app with mock models and local tool execution.
+
 Packages release independently. Bump the changed package, update its changelog, run checks, and publish from the reviewed commit using `pnpm --filter <package-name> publish --access public --no-git-checks`. Confirm the exact version and tarball before consumers update their registry pins. The app repository owns the internal live-conversation test harness; `fwcode` has no public script mode.
 
 ## License
