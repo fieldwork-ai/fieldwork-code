@@ -27,6 +27,21 @@ Shared handlers are exposed through `@fieldwork-ai/fieldwork-code/agent/runner` 
 
 PDF interpretation belongs to the private Fieldwork app. It supplies a bounded read program through the existing process runner, using Poppler on the selected machine; no PDF parser or page-formatting implementation ships in this package.
 
+## TUI development and visual regression checks
+
+The interface uses the terminal's font and ANSI palette. The transcript scrolls independently above a fixed composer and status bar; PgUp/PgDn and the mouse wheel navigate history. Enter sends, Shift+Enter inserts a newline, and Ctrl+C stops a running turn (or exits when idle). Approval dialogs show the command, file contents, edit diff, or plan; PgUp/PgDn scroll long details, arrows select a decision, Enter confirms, and Escape returns to the draft without deciding. `conversations.auto_approve` remains the cloud's saved policy.
+
+```bash
+pnpm --filter @fieldwork-ai/fieldwork-code tui:demo
+pnpm --filter @fieldwork-ai/fieldwork-code test:tui
+```
+
+The demo starts an ephemeral localhost HTTP server and uses the real session, SSE parser, and TUI. Type `shell`, `edit`, `write`, `plan`, `long`, `stream`, or `fail` for deterministic scenarios. It uses an isolated temporary log directory and dummy credentials; it makes no model calls and executes no tools. It is development-only and is excluded from the published package.
+
+The tests drive input bytes through the TUI and feed its actual ANSI output into xterm's headless terminal emulator. A second test launches `ProcessTerminal` in a real POSIX PTY and operates the demo with keyboard input. This test needs Python 3 and is skipped on Windows; the emulator tests run on all platforms. PNGs and matching text frames land in `.logs/tui-screenshots/` at the repository root, or `TUI_SCREENSHOT_DIR` when set. CI uploads them as `tui-screenshots`; failed PTY runs also retain their ANSI recording under `.logs/tui-pty-failure/` locally.
+
+Assertions cover submission, rejection and retry, preserved drafts, cloud-side pending approvals, approval and denial, unknown tool arguments, stopping, interrupted streams, long history, and resize behavior. Screenshots rasterize the terminal emulator's actual cell buffer using a fixed font and palette. They are visual-review artifacts, not pixel-golden comparisons: font rendering differs across platforms. Inspect the PNGs when changing presentation; the assertions alone do not establish visual quality.
+
 ## License
 
 Fieldwork AI code is dual-licensed under MIT or Apache-2.0, at your option. The OpenAI-derived portions of Codex transport retain their Apache-2.0 terms and attribution. See LICENSE, LICENSE-MIT, LICENSE-APACHE, and the transport NOTICE. Dependencies retain their own licenses.

@@ -18,6 +18,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm test
+      - name: Upload terminal screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-screenshots
+          path: .logs/tui-screenshots/
+          include-hidden-files: true
+          if-no-files-found: error
       - name: Smoke test published entry points
         run: |
           node packages/code/dist/code.js --version

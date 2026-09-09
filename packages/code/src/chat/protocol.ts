@@ -45,3 +45,7 @@ export function terminalText(text: string): string {
   // Strip control bytes before handing server content to a terminal renderer.
   return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
 }
+
+export function isUnsentMessage(message: UIMessage): boolean {
+  return (message.metadata as { fwcodeDelivery?: string } | undefined)?.fwcodeDelivery === "failed";
+}

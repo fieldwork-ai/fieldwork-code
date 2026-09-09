@@ -1,0 +1,227 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { runTui } from "../src/chat/tui.js";
+import { initContext } from "../src/http.js";
+import { mockBackend, deferred } from "./tui/backend.js";
+import { ScreenTerminal } from "./tui/terminal.js";
+
+let backend: Awaited<ReturnType<typeof mockBackend>>;
+let terminal: ScreenTerminal;
+let running: Promise<void>;
+let temporary: string;
+async function screen(text: string) {
+  await vi.waitFor(async () => { await terminal.flush(); expect(terminal.lines().join("\n")).toContain(text); }, { timeout: 4000, interval: 20 });
+}
+async function submit(text: string) { terminal.type(text); terminal.key("\r"); }
+function footer() { expect(terminal.lines().at(-1)).toContain("Enter send"); }
+beforeEach(async () => {
+  temporary = await mkdtemp(path.join(tmpdir(), "fwcode-tui-"));
+  vi.stubEnv("NO_COLOR", undefined);
+  vi.stubEnv("XDG_STATE_HOME", temporary);
+  vi.stubEnv("XDG_CONFIG_HOME", temporary);
+  backend = await mockBackend();
+  initContext({ apiUrl: backend.url, token: "test-only" });
+  terminal = new ScreenTerminal();
+  running = runTui({}, terminal);
+  await screen("What would you like to work on?");
+  await screen("Scripted model");
+});
+afterEach(async () => {
+  await backend.close();
+  if (terminal.input) { terminal.key("\x03"); await new Promise(resolve => setTimeout(resolve, 30)); if (terminal.input) terminal.key("\x03"); }
+  await running;
+  await terminal.flush();
+  terminal.dispose();
+  vi.unstubAllEnvs();
+  await rm(temporary, { recursive: true, force: true });
+});
+
+describe("TUI through keystrokes, HTTP, SSE and an ANSI terminal emulator", () => {
+  it("keeps the submitted message visible throughout a delayed reply and prevents duplicates", async () => {
+    await terminal.screenshot("01-ready");
+    const gate = deferred();
+    backend.replies.push({ text: "I’m inspecting the project.", wait: gate.promise });
+    await submit("Inspect the project and explain its entry point.");
+    await screen("Inspect the project and explain its entry point.");
+    await screen("I’m inspecting the project.");
+    await screen("Working…");
+    footer();
+    await terminal.screenshot("02-streaming");
+    terminal.type("Keep this next draft"); terminal.key("\r");
+    await screen("A turn is running");
+    expect(terminal.lines().join("\n")).toContain("Keep this next draft");
+    expect(backend.requests).toHaveLength(1);
+    gate.resolve();
+    await screen("Scripted model");
+    expect(terminal.lines().join("\n").match(/Inspect the project and explain its entry point\./g)).toHaveLength(1);
+    expect(terminal.lines().join("\n").match(/I’m inspecting the project\./g)).toHaveLength(1);
+    expect(backend.requests[0]).not.toHaveProperty("autoApprove");
+    await terminal.screenshot("03-complete-with-draft");
+  });
+
+  it("restores a rejected draft and can retry it", async () => {
+    backend.replies.push({ fail: "Server is busy. Try again." });
+    await submit("Please inspect README.md");
+    await screen("Server is busy. Try again.");
+    await screen("Send failed");
+    footer();
+    await terminal.screenshot("04-rejected-draft");
+    backend.replies.push({ text: "The README describes the CLI." });
+    terminal.key("\r");
+    await screen("The README describes the CLI.");
+    expect(backend.requests).toHaveLength(2);
+    expect((backend.requests[1].message as { parts: unknown[] }).parts).toEqual([{ type: "text", text: "Please inspect README.md" }]);
+  });
+
+  it("renders a shell approval, cancels without deciding, then approves through the keyboard", async () => {
+    backend.replies.push({ text: "I’ll list the source files.", tool: { name: "bash", input: { command: "rg --files src", timeout_ms: 10000 } } });
+    await submit("List the source files");
+    await screen("Run shell command");
+    expect(terminal.lines().join("\n")).not.toContain('"command":');
+    await screen("timeout ms: 10000");
+    await terminal.screenshot("05-shell-approval");
+    terminal.key("\x1b");
+    await submit("another message");
+    await screen("Answer the pending approval");
+    expect(backend.requests).toHaveLength(1);
+    // Clear the preserved draft and reopen the pending decision without sending a new user turn.
+    terminal.key("\x15");
+    backend.replies.push({ text: "The source files are listed." });
+    await submit("/approve");
+    await screen("The source files are listed.");
+    const approved = backend.requests[1].message as { parts: { approval?: { approved?: boolean } }[] };
+    expect(approved.parts.find(part => part.approval)?.approval?.approved).toBe(true);
+    await terminal.screenshot("06-approved");
+  });
+
+  it("renders an edit diff and denies it without losing the transcript", async () => {
+    backend.replies.push({ tool: { name: "edit", input: { file_path: "src/greeting.ts", old_string: 'return "Hello";', new_string: 'return "Hello, world!";' } } });
+    await submit("Improve the greeting");
+    await screen("Edit file");
+    await screen('- return "Hello";');
+    await screen('+ return "Hello, world!";');
+    await terminal.screenshot("07-edit-diff");
+    backend.replies.push({ text: "The file was left unchanged." });
+    terminal.key("\r");
+    await screen("The file was left unchanged.");
+    const denied = backend.requests[1].message as { parts: { approval?: { approved?: boolean } }[] };
+    expect(denied.parts.find(part => part.approval)?.approval?.approved).toBe(false);
+    await screen("edit · Denied");
+  });
+
+  it("keeps approval choices visible while scrolling a long plan and resizing", async () => {
+    backend.replies.push({ tool: { name: "present_plan", input: { plan: Array.from({ length: 45 }, (_, i) => `${i + 1}. Review module ${i + 1} and its integration boundary.`).join("\n") } } });
+    await submit("Plan the refactor");
+    await screen("Approve plan");
+    await screen("1. Review module 1");
+    await terminal.resize(60, 24);
+    await screen("PgUp/PgDn details");
+    terminal.key("\x1b[6~");
+    await vi.waitFor(async () => { await terminal.flush(); expect(terminal.lines().join("\n")).not.toContain("1. Review module 1 "); });
+    await screen("Approve plan");
+    await screen("Deny");
+    await screen("Esc back");
+    await terminal.screenshot("08-plan-narrow");
+    backend.replies.push({ text: "The plan is approved." });
+    terminal.key("\x1b[B"); terminal.key("\r");
+    await screen("The plan is approved.");
+    footer();
+  });
+
+  it("pins the composer through long output, manual scroll, multiline input and resize", async () => {
+    const gate = deferred();
+    backend.replies.push({ text: Array.from({ length: 80 }, (_, i) => `Line ${i + 1}: deterministic streaming output.`).join("\n\n"), wait: gate.promise });
+    await submit("Show a long response");
+    await screen("Line 80:");
+    footer();
+    terminal.key("\x1b[5~");
+    await vi.waitFor(async () => { await terminal.flush(); expect(terminal.lines().join("\n")).not.toContain("Line 80:"); });
+    footer();
+    await terminal.screenshot("09-scrollback");
+    terminal.key("\x1b[200~first draft line\nsecond draft line\x1b[201~");
+    await screen("second draft line");
+    for (const [cols, rows] of [[40, 16], [80, 24], [120, 40]]) {
+      await terminal.resize(cols, rows);
+      await vi.waitFor(async () => { await terminal.flush(); footer(); expect(terminal.lines().join("\n")).toContain("second draft line"); });
+      await terminal.screenshot(`10-resize-${cols}x${rows}`);
+    }
+    gate.resolve();
+    await screen("Scripted model");
+    footer();
+  });
+
+  it("can answer a cloud-side approval discovered after a rejected send", async () => {
+    backend.replies.push({ fail: "Pending approval", pending: {
+      id: "cloud-assistant", role: "assistant", parts: [{ type: "tool-bash", toolCallId: "cloud-call", state: "approval-requested", input: { command: "pwd" }, approval: { id: "cloud-approval" } }],
+    } });
+    await submit("A draft from before the cloud approval");
+    await screen("Answer the pending approval, then send your message again.");
+    terminal.key("\x15");
+    backend.replies.push({ text: "The cloud-side request was denied." });
+    await submit("/deny");
+    await screen("The cloud-side request was denied.");
+    expect((backend.requests[1].message as { id: string }).id).toBe("cloud-assistant");
+  });
+
+  it("does not overwrite a newer draft when an earlier send is rejected", async () => {
+    const gate = deferred();
+    backend.replies.push({ fail: "Try again later.", wait: gate.promise });
+    await submit("The rejected message");
+    await vi.waitFor(() => expect(backend.requests).toHaveLength(1));
+    terminal.type("The newer draft");
+    gate.resolve();
+    await screen("Try again later.");
+    const lines = terminal.lines();
+    expect(lines.slice(-5).join("\n")).toContain("The newer draft");
+    expect(lines.slice(0, -5).join("\n")).toContain("The rejected message");
+  });
+
+  it("renders file contents and preserves extra arguments in approvals", async () => {
+    backend.replies.push({ tool: { name: "write", input: { file_path: "src/config.ts", content: 'export const retries = 3;\nexport const timeout = 1000;', workdir: "/project" } } });
+    await submit("Write the configuration");
+    await screen("Write file");
+    await screen("export const retries = 3;");
+    await screen("workdir: /project");
+    await terminal.screenshot("12-write-approval");
+    terminal.key("\x1b");
+  });
+
+  it("shows unfamiliar tool arguments as labeled values, including nested values", async () => {
+    backend.replies.push({ tool: { name: "connector_update", input: { record_id: "customer-42", changes: { name: "Jane", tags: ["new", "trial"] }, dry_run: false } } });
+    await submit("Update the customer");
+    await screen("Allow connector update");
+    await screen("record id: customer-42");
+    await screen("name: Jane");
+    await screen("• trial");
+    await screen("dry run: false");
+    await terminal.screenshot("13-connector-approval");
+    terminal.key("\x1b");
+  });
+
+  it("stops a held stream and preserves the next draft", async () => {
+    const gate = deferred();
+    backend.replies.push({ text: "Waiting for a slow operation.", wait: gate.promise });
+    await submit("Run a slow operation");
+    await screen("Waiting for a slow operation.");
+    terminal.type("My next draft");
+    terminal.key("\x03");
+    await vi.waitFor(() => expect(backend.requests).toHaveLength(1));
+    await screen("My next draft");
+    await screen("Stopped");
+    await terminal.settled();
+    footer();
+    gate.resolve();
+    await terminal.screenshot("14-stopped");
+  });
+
+  it("shows interrupted streaming content with an actionable error", async () => {
+    backend.replies.push({ text: "This partial reply must remain visible.", truncate: true });
+    await submit("Simulate an interrupted connection");
+    await screen("Connection ended before the turn finished.");
+    await screen("This partial reply must remain visible.");
+    footer();
+    await terminal.screenshot("11-interrupted");
+  });
+});

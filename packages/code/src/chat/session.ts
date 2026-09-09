@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
 import { api, requireOrgId } from "../http.js";
 import { consumeTurn } from "./stream.js";
-import { pendingApprovals, respondToApproval, type Conversation } from "./protocol.js";
+import { pendingApprovals, respondToApproval, isUnsentMessage, type Conversation } from "./protocol.js";
 
 export type Choose = (title: string, items: { value: string; label: string; description?: string }[]) => Promise<string | undefined>;
 export class CodeSession {
@@ -45,9 +45,9 @@ export class CodeSession {
       this.local = await connectLocal(this.conversation.conversation_id, options.root, identity!.runner_device_id, this.events.status);
       try { saveLocalState(options.root, { ...localState(options.root), conversation: this.conversation.conversation_id }); } catch { this.events.status("Could not save directory resume state"); }
     }
-    this.events.status(`${this.conversation.model} · ${this.conversation.conversation_id}`);
+    this.events.status(this.conversation.model);
   }
-  get pending() { return pendingApprovals(this.messages.at(-1)); }
+  get pending() { return pendingApprovals(this.messages.findLast(message => !isUnsentMessage(message))); }
   async reload() {
     this.conversation = await this.json<Conversation>(this.path);
     this.messages = this.conversation.messages ?? [];
@@ -63,44 +63,68 @@ export class CodeSession {
     this.messages = [...(page.messages ?? []).filter(message => !ids.has(message.id)), ...this.messages];
     this.events.transcript(this.messages);
   }
+  assertCanSend() {
+    if (this.busy) throw new Error("A turn is running. Use /stop first.");
+    if (this.pending.length) throw new Error("Answer the pending approval with /approve or /deny first.");
+    this.local?.assertOnline();
+  }
   async turn(body: Record<string, unknown>, continuation?: UIMessage) {
     if (this.busy) throw new Error("A turn is running. Use /stop first.");
     this.local?.assertOnline();
     this.partial = undefined;
     this.busy = true;
     this.controller = new AbortController();
+    this.events.status("Working…");
+    let accepted = false;
     try {
       const response = await api(`${this.path}/chat`, {
         method: "POST", signal: this.controller.signal,
-        body: JSON.stringify({ ...body, autoApprove: false, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+        body: JSON.stringify({ ...body, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
       });
       if (!response.ok) {
         const error = await response.json();
         if (response.status === 409 && error.pending_approval) {
           await this.reload();
-          this.events.status("Answer the pending approval, then send your message again.");
-          return;
+          throw new Error("Answer the pending approval, then send your message again.");
         }
         throw new Error(error.error ?? `Turn failed (${response.status})`);
       }
+      accepted = true;
       let finalStatus: string | undefined;
-      await consumeTurn(response, { message: continuation, compact: body.command === "compact", onMessage: message => { this.partial = message; this.events.streaming(message); }, onStatus: status => { finalStatus = status; this.events.status(status); } });
+      await consumeTurn(response, { message: continuation, compact: body.command === "compact", onMessage: message => {
+        this.partial = message;
+        const exists = this.messages.some(item => item.id === message.id);
+        this.messages = exists ? this.messages.map(item => item.id === message.id ? message : item) : [...this.messages, message];
+        this.events.streaming(message);
+      }, onStatus: status => { finalStatus = status; this.events.status(status); } });
       await this.reload();
       this.events.status(body.command === "compact" && finalStatus ? finalStatus : this.pending.length ? "Approval needed" : this.conversation.model);
-    } catch (error) { this.log?.append("interruption", { message: this.partial }); throw error; } finally { this.busy = false; this.controller = undefined; }
+    } catch (error) {
+      if (this.controller?.signal.aborted) { this.events.status("Stopped"); return; }
+      if (!accepted && body.message && (body.message as UIMessage).role === "user") {
+        const message = body.message as UIMessage;
+        const failed = { ...message, metadata: { fwcodeDelivery: "failed" } };
+        this.messages = [...this.messages.filter(item => item.id !== message.id), failed];
+        this.events.transcript(this.messages);
+      }
+      this.log?.append("interruption", { message: this.partial });
+      throw error;
+    } finally { this.busy = false; this.controller = undefined; }
   }
   async send(text: string) {
-    if (this.pending.length) throw new Error("Answer the pending approval with /approve or /deny first.");
+    this.assertCanSend();
     const message: UIMessage = { id: randomUUID(), role: "user", parts: [{ type: "text", text }] };
     this.log?.message(message);
+    this.messages = [...this.messages, message];
+    this.events.transcript(this.messages);
     await this.turn({ message });
   }
   async approve(approved: boolean, id = this.pending[0]?.id) {
-    const last = this.messages.at(-1);
+    const last = this.messages.findLast(message => !isUnsentMessage(message));
     if (!last || !id) throw new Error("No pending approval");
     this.log?.append("approval", { approval_id: id, approved });
     const message = respondToApproval(last, id, approved);
-    this.messages = [...this.messages.slice(0, -1), message];
+    this.messages = this.messages.map(item => item.id === message.id ? message : item);
     if (pendingApprovals(message).length) {
       this.events.transcript(this.messages);
       return;
@@ -110,7 +134,7 @@ export class CodeSession {
   async stop() {
     await this.json(`${this.path}/stop`, { method: "POST" });
     this.controller?.abort();
-    this.events.status("Stop requested");
+    this.events.status("Stopped");
   }
   async close() {
     this.lifetime.abort();

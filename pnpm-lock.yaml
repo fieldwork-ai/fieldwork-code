@@ -26,6 +26,9 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
+      '@xterm/headless':
+        specifier: 6.0.0
+        version: 6.0.0
       tsx:
         specifier: ^4.19.0
         version: 4.23.13
@@ -567,6 +570,9 @@ packages:
 
   '@workflow/serde@4.1.0':
     resolution: {integrity: sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ==}
+
+  '@xterm/headless@6.0.0':
+    resolution: {integrity: sha512-5Yj1QINYCyzrZtf8OFIHi47iQtI+0qYFPHmouEfG8dHNxbZ9Tb9YGSuLcsEwj9Z+OL75GJqPyJbyoFer80a2Hw==}
 
   ai@7.0.93:
     resolution: {integrity: sha512-CJss6zb9mlltk/mCr8qom20NBnqEQxVawkqwtT62tCwsxilZpXfHNRMRwcS3XRpzdP1kEluVuDBUayYWEEd95g==}
@@ -1248,6 +1254,8 @@ snapshots:
       tinyrainbow: 3.1.1
 
   '@workflow/serde@4.1.0': {}
+
+  '@xterm/headless@6.0.0': {}
 
   ai@7.0.93(zod@4.5.4):
     dependencies:

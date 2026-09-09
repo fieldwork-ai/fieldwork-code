@@ -1,3 +1,9 @@
+# 0.19.0
+
+Keep submitted messages visible immediately, preserve drafts on rejected sends, and reconcile streaming replies by message ID. Use a full-screen transcript with a fixed composer and status bar. Render shell commands, file contents, edit diffs, plans, and unfamiliar tool arguments as readable approval dialogs. Leave `conversations.auto_approve` under cloud control instead of sending an approval override on every turn.
+
+Add a scripted local HTTP/SSE backend, terminal-emulator interaction tests, a real PTY smoke test, and PNG captures of the rendered terminal cells. CI retains the screenshots for review. Run `pnpm --filter @fieldwork-ai/fieldwork-code tui:demo` to operate the mock-backed interface without an account or model calls.
+
 # 0.18.0
 
 Replace the WebSocket relay with app-hosted SSE execution and HTTP results. fwcode opens the conversation executor directly; Electron starts the same executor from its device control stream. Reject duplicate requests and interrupt foreground work on cancellation or disconnect. Requires the matching app SSE execution API.
