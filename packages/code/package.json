@@ -22,7 +22,8 @@
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:tui": "vitest run tests/tui.test.ts tests/tui-pty.test.ts",
-    "tui:demo": "tsx tests/tui/demo.ts"
+    "tui:demo": "tsx tests/tui/demo.ts",
+    "test:tui:live": "vitest run --config vitest.live.config.ts"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.85.1",
