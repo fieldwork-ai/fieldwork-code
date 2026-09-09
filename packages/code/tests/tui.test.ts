@@ -15,6 +15,12 @@ async function screen(text: string) {
   await vi.waitFor(async () => { await terminal.flush(); expect(terminal.lines().join("\n")).toContain(text); }, { timeout: 4000, interval: 20 });
 }
 async function submit(text: string) { terminal.type(text); terminal.key("\r"); }
+function approvalAboveEditor(editorRows = 3) {
+  const lines = terminal.lines();
+  const bottom = lines.findLastIndex(line => line.startsWith("└"));
+  expect(bottom).toBe(terminal.rows - editorRows - 3);
+  expect(lines[bottom + 1]).toMatch(/^─/);
+}
 function footer() { expect(terminal.lines().at(-1)).toContain("Enter send"); }
 beforeEach(async () => {
   temporary = await mkdtemp(path.join(tmpdir(), "fwcode-tui-"));
@@ -81,6 +87,7 @@ describe("TUI through keystrokes, HTTP, SSE and an ANSI terminal emulator", () =
     await screen("Run shell command");
     expect(terminal.lines().join("\n")).not.toContain('"command":');
     await screen("timeout ms: 10000");
+    approvalAboveEditor();
     await terminal.screenshot("05-shell-approval");
     terminal.key("\x1b");
     await submit("another message");
@@ -123,7 +130,14 @@ describe("TUI through keystrokes, HTTP, SSE and an ANSI terminal emulator", () =
     await screen("Approve plan");
     await screen("Deny");
     await screen("Esc back");
+    approvalAboveEditor();
     await terminal.screenshot("08-plan-narrow");
+    for (const [cols, rows] of [[40, 16], [80, 24], [120, 40]]) {
+      await terminal.resize(cols, rows);
+      approvalAboveEditor();
+      expect(terminal.lines().join("\n")).toContain("Deny");
+      await terminal.screenshot(`08-plan-bottom-${cols}x${rows}`);
+    }
     backend.replies.push({ text: "The plan is approved." });
     terminal.key("\x1b[B"); terminal.key("\r");
     await screen("The plan is approved.");
@@ -224,4 +238,62 @@ describe("TUI through keystrokes, HTTP, SSE and an ANSI terminal emulator", () =
     footer();
     await terminal.screenshot("11-interrupted");
   });
+});
+
+
+it("toggles cloud auto-approval from the pending panel and follows the resumed transcript", async () => {
+  backend.replies.push({ tool: { name: "bash", input: { command: "git status" } } });
+  await submit("Check the repository");
+  await screen("Run shell command");
+  await screen("Auto-approve OFF");
+  terminal.key("\x07");
+  await screen("Cloud resumed the tool.");
+  await screen("Auto-approve ON");
+  expect(backend.approvalSettings).toEqual([true]);
+  expect(backend.requests).toHaveLength(1);
+  backend.replies.push({ tool: { name: "bash", input: { command: "git diff" } } });
+  await submit("Check the diff too");
+  await screen("Cloud auto-approved the tool.");
+  expect(backend.requests[1]).not.toHaveProperty("autoApprove");
+  expect(terminal.lines().join("\n")).not.toContain("Run shell command");
+  terminal.key("\x07");
+  await screen("Auto-approve OFF");
+  expect(backend.approvalSettings).toEqual([true, false]);
+});
+
+it("keeps explicit plan approval after enabling auto-approval", async () => {
+  backend.replies.push({ tool: { name: "present_plan", input: { plan: "Review the changes" } } });
+  await submit("Make a plan");
+  await screen("Approve plan");
+  terminal.key("\x07");
+  await screen("Auto-approve ON");
+  await screen("Approve plan");
+  expect(backend.requests).toHaveLength(1);
+  approvalAboveEditor();
+});
+
+it("supports approval mode commands and preserves the saved mode when a toggle is rejected", async () => {
+  await submit("/approvals on");
+  await screen("Auto-approve ON");
+  backend.approvalFailures.push("Only the owner can change approvals");
+  terminal.key("\x07");
+  await screen("Only the owner can change approvals");
+  expect(terminal.lines().join("\n")).toContain("Auto-approve ON");
+  await submit("/approvals off");
+  await screen("Auto-approve OFF");
+  expect(backend.approvalSettings).toEqual([true, false]);
+  expect(backend.requests).toHaveLength(0);
+});
+
+it("anchors the approval above a multiline draft", async () => {
+  const gate = deferred();
+  backend.replies.push({ wait: gate.promise, tool: { name: "bash", input: { command: "git status" } } });
+  await submit("Check this repository");
+  await screen("Working…");
+  terminal.key("\x1b[200~First draft line\nSecond draft line\x1b[201~");
+  gate.resolve();
+  await screen("Run shell command");
+  approvalAboveEditor(4);
+  await screen("Second draft line");
+  await terminal.screenshot("18-approval-above-draft");
 });

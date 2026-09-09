@@ -12,6 +12,9 @@ export type Reply = { text?: string; tool?: { name: string; input: unknown }; wa
 export async function mockBackend(initialMessages: UIMessage[] = [], script?: (message: UIMessage) => Reply) {
   let messages = structuredClone(initialMessages);
   let counter = 0;
+  let autoApprove = false;
+  const approvalSettings: boolean[] = [];
+  const approvalFailures: string[] = [];
   const replies: Reply[] = [];
   const requests: Record<string, unknown>[] = [];
   const active = new Set<ServerResponse>();
@@ -21,7 +24,21 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
     const json = (data: unknown, status = 200) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(data)); };
     if (req.url === "/api/conversations" || (req.url === "/api/conversations/tui-demo" && req.method === "GET")) {
-      json({ conversation_id: "tui-demo", model: "Scripted model", messages, auto_approve: false }); return;
+      json({ conversation_id: "tui-demo", model: "Scripted model", messages, auto_approve: autoApprove }); return;
+    }
+    if (req.url === "/api/conversations/tui-demo/auto-approve") {
+      const error = approvalFailures.shift();
+      if (error) { json({ error }, 403); return; }
+      autoApprove = body.enabled;
+      approvalSettings.push(autoApprove);
+      let resumed = false;
+      if (autoApprove) for (const part of messages.at(-1)?.parts ?? []) {
+        if ("state" in part && part.state === "approval-requested" && part.type !== "tool-present_plan" && part.type !== "tool-ea_calendar_change") {
+          Object.assign(part, { state: "output-available", output: { output: "Cloud resumed the tool." } });
+          resumed = true;
+        }
+      }
+      json({ ok: true, resumed }); return;
     }
     if (req.url === "/api/conversations/tui-demo/stop") {
       for (const stream of active) stream.end();
@@ -69,8 +86,14 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
     if (reply.tool) {
       const toolCallId = `tool-${counter}`, approvalId = `approval-${counter}`;
       emit({ type: "tool-input-available", toolCallId, toolName: reply.tool.name, input: reply.tool.input });
-      emit({ type: "tool-approval-request", approvalId, toolCallId });
-      message.parts.push({ type: `tool-${reply.tool.name}`, toolCallId, input: reply.tool.input, state: "approval-requested", approval: { id: approvalId } });
+      if (autoApprove && reply.tool.name !== "present_plan" && reply.tool.name !== "ea_calendar_change") {
+        const output = { output: "Cloud auto-approved the tool." };
+        emit({ type: "tool-output-available", toolCallId, output });
+        message.parts.push({ type: `tool-${reply.tool.name}`, toolCallId, input: reply.tool.input, state: "output-available", output });
+      } else {
+        emit({ type: "tool-approval-request", approvalId, toolCallId });
+        message.parts.push({ type: `tool-${reply.tool.name}`, toolCallId, input: reply.tool.input, state: "approval-requested", approval: { id: approvalId } });
+      }
     }
     save();
     if (!reply.truncate) { emit({ type: "finish" }); res.write("data: [DONE]\n\n"); }
@@ -79,7 +102,7 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    replies, requests,
+    replies, requests, approvalSettings, approvalFailures,
     async close() { for (const stream of active) stream.end(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
   };
 }

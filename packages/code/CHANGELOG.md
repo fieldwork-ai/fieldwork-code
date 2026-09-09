@@ -1,3 +1,9 @@
+# 0.20.0
+
+Add awaited device preparation hooks, capability advertisement, and idle-only maintenance callbacks for embedding applications. Preserve legacy directory authorization and reap background processes when an executor closes.
+
+Anchor approval panels directly above the composer, including after resizing and with multiline drafts. Add Ctrl+G and `/approvals on|off` to update the cloud auto-approval setting, display its saved state, and follow resumed turns. Plans still require explicit approval.
+
 # 0.19.0
 
 Keep submitted messages visible immediately, preserve drafts on rejected sends, and reconcile streaming replies by message ID. Use a full-screen transcript with a fixed composer and status bar. Render shell commands, file contents, edit diffs, plans, and unfamiliar tool arguments as readable approval dialogs. Leave `conversations.auto_approve` under cloud control instead of sending an approval override on every turn.

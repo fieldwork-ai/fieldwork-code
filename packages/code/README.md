@@ -11,7 +11,7 @@ The cloud runs the model loop, defines the full tool catalog, and executes cloud
 
 Version 0.18 requires the app SSE execution API with `runner_sessions` and `runner_requests`.
 
-Inside chat: `/model`, `/codex`, `/logs`, `/compact`, `/stop`, `/approve`, `/deny`, `/older`, `/quit`. `/codex` reuses an existing Fieldwork Codex connection or opens browser OAuth with a temporary localhost callback; after your confirmation, credentials are handed to Fieldwork cloud for encrypted storage and refresh. No model calls run locally.
+Inside chat: `/model`, `/codex`, `/logs`, `/compact`, `/stop`, `/approvals`, `/approve`, `/deny`, `/older`, `/quit`. `/codex` reuses an existing Fieldwork Codex connection or opens browser OAuth with a temporary localhost callback; after your confirmation, credentials are handed to Fieldwork cloud for encrypted storage and refresh. No model calls run locally.
 
 Login lives under `$XDG_CONFIG_HOME/fwcode/config.json` (default `~/.config/fwcode/config.json`). JSONL conversation logs live under `$XDG_STATE_HOME/fwcode/conversations/` (default `~/.local/state/fwcode/conversations/`). Logs persist across logout until you delete them. Cloud history remains authoritative. `FWCODE_API_URL` and `FWCODE_TOKEN` support development environments independently of the asset CLI's `FIELDWORK_*` configuration.
 
@@ -29,7 +29,7 @@ PDF interpretation belongs to the private Fieldwork app. It supplies a bounded r
 
 ## TUI development and visual regression checks
 
-The interface uses the terminal's font and ANSI palette. The transcript scrolls independently above a fixed composer and status bar; PgUp/PgDn and the mouse wheel navigate history. Enter sends, Shift+Enter inserts a newline, and Ctrl+C stops a running turn (or exits when idle). Approval dialogs show the command, file contents, edit diff, or plan; PgUp/PgDn scroll long details, arrows select a decision, Enter confirms, and Escape returns to the draft without deciding. `conversations.auto_approve` remains the cloud's saved policy.
+The interface uses the terminal's font and ANSI palette. The transcript scrolls independently above a fixed composer and status bar; PgUp/PgDn and the mouse wheel navigate history. Enter sends, Shift+Enter inserts a newline, and Ctrl+C stops a running turn (or exits when idle). Approval dialogs stay directly above the composer and show the command, file contents, edit diff, or plan; PgUp/PgDn scroll long details, arrows select a decision, Enter confirms, and Escape returns to the draft without deciding. **Ctrl+G** toggles auto-approval, including from a pending approval panel. `/approvals` opens the mode picker; `/approvals on` and `/approvals off` set it directly. The status bar shows the saved mode. This updates `conversations.auto_approve` in the cloud and follows a resumed turn without sending it again. Explicit plan approvals still require a decision.
 
 ```bash
 pnpm --filter @fieldwork-ai/fieldwork-code tui:demo

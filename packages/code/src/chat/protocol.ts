@@ -3,6 +3,7 @@ import type { UIMessage } from "ai";
 export interface Conversation {
   conversation_id: string;
   model: string;
+  auto_approve?: boolean;
   messages?: UIMessage[];
   next_cursor?: string | null;
   turn_active?: boolean;

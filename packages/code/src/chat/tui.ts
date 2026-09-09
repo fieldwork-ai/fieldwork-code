@@ -14,12 +14,12 @@ export async function runTui(
   const transcript = new Transcript();
   let statusText = "Connecting…";
   const editor = new Editor(tui, { borderColor: ink.muted, selectList: selectionTheme }, { paddingX: 1, autocompleteMaxVisible: 5 });
-  editor.setAutocompleteProvider(new CombinedAutocompleteProvider(["model", "codex", "logs", "compact", "stop", "approve", "deny", "older", "quit"].map(name => ({ name })), options.root ?? process.cwd()));
+  editor.setAutocompleteProvider(new CombinedAutocompleteProvider(["model", "codex", "logs", "compact", "stop", "approvals", "approve", "deny", "older", "quit"].map(name => ({ name })), options.root ?? process.cwd()));
   const footer: Component = {
     invalidate() {},
     render(width) {
-      const activity = ` ${statusText}${tui.isFollowingOutput ? "" : " · Scrolled up"}`;
-      const hint = overlayOpen ? "↑/↓ choose · Enter confirm · Esc back" : width >= 72 ? "Enter send · Shift+Enter newline · PgUp/PgDn scroll · Ctrl+C stop" : "Enter send · Ctrl+C stop";
+      const activity = ` ${session.conversation ? `Auto-approve ${session.conversation.auto_approve ? "ON" : "OFF"} · ` : ""}${statusText}${tui.isFollowingOutput ? "" : " · Scrolled up"}`;
+      const hint = overlayOpen ? (width >= 72 ? "↑/↓ choose · Enter confirm · Ctrl+G auto-approve · Esc back" : "Ctrl+G auto · ↑/↓ · Enter · Esc") : width >= 72 ? "Enter send · Ctrl+G auto-approve · PgUp/PgDn scroll · Ctrl+C stop" : "Enter send · Ctrl+G auto-approve";
       return [truncateToWidth(activity, width), truncateToWidth(ink.muted(` ${hint}`), width)];
     },
   };
@@ -36,7 +36,9 @@ export async function runTui(
   });
   let overlayOpen = false;
   let dismissOverlay: (() => void) | undefined;
-  const select = (title: string, content: Component, items: Parameters<Choose>[1]): ReturnType<Choose> => new Promise(resolve => {
+  const select = (title: string, content: Component, items: Parameters<Choose>[1], aboveEditor = false): ReturnType<Choose> => new Promise(resolve => {
+    const bottomMargin = () => aboveEditor ? editor.render(terminal.columns).length + 2 : 0;
+    const maximumHeight = () => aboveEditor ? Math.max(1, terminal.rows - bottomMargin()) : Math.floor(terminal.rows * 0.8);
     const list = new SelectList(items, Math.min(items.length, 6), selectionTheme);
     const heading = new Text(ink.bold(terminalText(title)), 1, 0);
     const box: Component = new (class implements Component {
@@ -49,7 +51,7 @@ export async function runTui(
         const top = heading.render(inner);
         const choices = list.render(inner);
         const lines = content.render(inner);
-        this.pageSize = Math.max(1, Math.floor(terminal.rows * 0.8) - top.length - choices.length - 6);
+        this.pageSize = Math.max(1, maximumHeight() - top.length - choices.length - 5);
         this.maximumOffset = Math.max(0, lines.length - this.pageSize);
         this.offset = Math.min(this.offset, this.maximumOffset);
         const hint = this.maximumOffset ? "PgUp/PgDn details · Enter confirm · Esc back" : "↑/↓ choose · Enter confirm · Esc back";
@@ -68,7 +70,7 @@ export async function runTui(
       }
     })();
     overlayOpen = true;
-    const handle = tui.showOverlay(box, { width: "100%", maxHeight: "80%", anchor: "center" });
+    const handle = tui.showOverlay(box, { width: "100%", get maxHeight() { return maximumHeight(); }, anchor: aboveEditor ? "bottom-center" : "center", get margin() { return { bottom: bottomMargin() }; } });
     const finish = (value?: string) => {
       handle.hide(); overlayOpen = false; dismissOverlay = undefined; tui.setFocus(editor); resolve(value);
     };
@@ -86,7 +88,7 @@ export async function runTui(
       const { title, component } = approvalContent(pending);
       const verdict = await select(title, component, [
         { value: "deny", label: "Deny" }, { value: "approve", label: "Approve" },
-      ]);
+      ], true);
       if (!verdict) break;
       try { await session.approve(verdict === "approve", pending.id); } catch (error) { report(error); break; }
     }
@@ -122,6 +124,13 @@ export async function runTui(
       });
     };
     tui.addInputListener(data => {
+      if (matchesKey(data, "ctrl+g")) {
+        if (ready) {
+          dismissOverlay?.();
+          void session.setAutoApprove(!session.conversation.auto_approve).then(offerApprovals).catch(report);
+        }
+        return { consume: true };
+      }
       if (matchesKey(data, "ctrl+c")) {
         if (overlayOpen) dismissOverlay?.();
         else if (session.busy) void session.stop().catch(report);

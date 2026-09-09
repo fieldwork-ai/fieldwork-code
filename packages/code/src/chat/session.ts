@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { hostname } from "node:os";
 import { ConversationLog } from "./log.js";
 import { connectLocal } from "./local.js";
@@ -19,6 +20,7 @@ export class CodeSession {
   private local?: Awaited<ReturnType<typeof connectLocal>>;
   private partial?: UIMessage;
   private controller?: AbortController;
+  private changingApprovals = false;
   constructor(readonly events: {
     transcript: (messages: UIMessage[]) => void;
     streaming: (message: UIMessage) => void;
@@ -131,6 +133,30 @@ export class CodeSession {
     }
     await this.turn({ message }, message);
   }
+  async setAutoApprove(enabled: boolean) {
+    if (this.changingApprovals) throw new Error("Approval settings are still being saved");
+    this.changingApprovals = true;
+    let resumed: boolean;
+    try {
+      const result = await this.json<{ resumed: boolean }>(`${this.path}/auto-approve`, { method: "POST", body: JSON.stringify({ enabled }) });
+      this.conversation.auto_approve = enabled;
+      resumed = result.resumed;
+      this.events.status(`Auto-approve ${enabled ? "on" : "off"}. Plans still require approval.`);
+    } finally { this.changingApprovals = false; }
+    if (resumed && !this.busy) {
+      this.busy = true;
+      this.events.status("Working…");
+      try {
+        // The cloud resumes the parked turn; follow its persisted transcript instead of submitting it twice.
+        do {
+          await this.reload();
+          if (!this.conversation.turn_active) break;
+          await delay(500, undefined, { signal: this.lifetime.signal });
+        } while (!this.lifetime.signal.aborted);
+        this.events.status(this.pending.length ? "Approval needed" : this.conversation.model);
+      } finally { this.busy = false; }
+    }
+  }
   async stop() {
     await this.json(`${this.path}/stop`, { method: "POST" });
     this.controller?.abort();
@@ -147,6 +173,15 @@ export class CodeSession {
   async command(line: string, choose?: Choose) {
     const [command, ...args] = line.trim().split(/\s+/);
     if (command === "/approve" || command === "/deny") return this.approve(command === "/approve", args[0]);
+    if (command === "/approvals") {
+      const selected = args[0] ?? (choose ? await choose("Tool approvals", [
+        { value: "off", label: "Ask for approval", description: "Review each tool action" },
+        { value: "on", label: "Auto-approve tools", description: "Applies to this conversation; plans still require approval" },
+      ]) : undefined);
+      if (!selected) return;
+      if (selected !== "on" && selected !== "off") throw new Error("Use /approvals on or /approvals off");
+      return this.setAutoApprove(selected === "on");
+    }
     if (command === "/stop") return this.stop();
     if (command === "/older") return this.older();
     if (command === "/compact") return this.turn({ command: "compact" });
@@ -164,6 +199,6 @@ export class CodeSession {
     }
     if (command === "/logs") { this.events.status(this.log?.path ?? "No conversation log"); return; }
     if (command === "/codex" && choose) return connectCodex(choose, this.events.status, this.lifetime.signal);
-    throw new Error("Commands: /model /codex /logs /compact /stop /approve /deny /older /quit");
+    throw new Error("Commands: /model /codex /logs /compact /stop /approvals /approve /deny /older /quit");
   }
 }
