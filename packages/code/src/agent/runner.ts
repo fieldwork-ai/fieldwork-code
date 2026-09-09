@@ -3,7 +3,7 @@ import { routes } from "./router.js";
 import { runnerRoots, runnerSignal, resolveRoot } from "./tools/workspace.js";
 import { interruptForeground, reapBackground } from "./tools/bash.js";
 
-interface ConnectionOptions { apiUrl: string; getToken: () => Promise<string>; onStatus?: (online: boolean) => void }
+export interface ConnectionOptions { apiUrl: string; getToken: () => Promise<string>; onStatus?: (online: boolean) => void }
 export interface RunnerOptions extends ConnectionOptions { sessionId: string; roots: string[]; reconnect?: boolean; onClose?: () => void }
 async function request(options: ConnectionOptions, path: string, signal: AbortSignal, init: RequestInit = {}) {
   const response = await fetch(`${options.apiUrl.replace(/\/$/, "")}${path}`, { ...init, signal, headers: { ...init.headers, Authorization: `Bearer ${await options.getToken()}` } });
@@ -72,23 +72,48 @@ export function startRunner(options: RunnerOptions): { stop: () => void } {
       if (options.reconnect === false || lifetime.signal.aborted) break;
       await delay(Math.min(30_000, 1000 * 2 ** attempts++), undefined, { signal: lifetime.signal }).catch(() => {});
     } while (!lifetime.signal.aborted);
+    for (const root of options.roots) reapBackground(root);
     options.onClose?.();
   }
   void connect();
   return { stop() { lifetime.abort(); active?.abort(); for (const root of options.roots) { interruptForeground(root); reapBackground(root); } } };
 }
-export function startDeviceRunner(options: ConnectionOptions & { roots: string[] }): { stop: () => void } {
+export interface DeviceRunnerOptions extends ConnectionOptions {
+  roots: string[];
+  prepareJob?: (frame: Record<string, unknown>, signal: AbortSignal) => Promise<string>;
+  onControl?: (frame: Record<string, unknown>, signal: AbortSignal) => Promise<void>;
+  capabilities?: string[];
+}
+export function startDeviceRunner(options: DeviceRunnerOptions): { stop: () => void } {
   const lifetime = new AbortController(), jobs = new Map<string, ReturnType<typeof startRunner>>();
+  const preparing = new Set<string>(), controls = new Set<string>();
   void (async () => {
     let attempts = 0;
     while (!lifetime.signal.aborted) {
       try {
-        await events(await request(options, "/api/runners/events", lifetime.signal), frame => {
+        await events(await request(options, "/api/runners/events", lifetime.signal, { headers: { "X-Runner-Capabilities": options.capabilities?.join(",") ?? "" } }), frame => {
           if (frame.type === "ready") { attempts = 0; options.onStatus?.(true); return; }
           if (frame.type === "heartbeat") return;
-          if (frame.type !== "start" || typeof frame.session_id !== "string" || typeof frame.root !== "string" || !options.roots.includes(frame.root)) throw new Error("Invalid job notification");
-          const id = frame.session_id;
-          if (!jobs.has(id)) jobs.set(id, startRunner({ ...options, sessionId: id, roots: [frame.root], onStatus: undefined, reconnect: false, onClose: () => jobs.delete(id) }));
+          if (frame.type === "control" && typeof frame.id === "string" && options.onControl) {
+            const id = frame.id;
+            if (!jobs.size && !preparing.size && !controls.has(id) && controls.size < 16) {
+              controls.add(id);
+              void options.onControl(frame, lifetime.signal).catch(() => {}).finally(() => controls.delete(id));
+            }
+            return;
+          }
+          if (frame.type !== "start" || typeof frame.session_id !== "string" || typeof frame.root !== "string") throw new Error("Invalid job notification");
+          const id = frame.session_id, root = frame.root;
+          if (!options.prepareJob && !options.roots.includes(root)) throw new Error("Invalid job notification");
+          if (!controls.size && !jobs.has(id) && !preparing.has(id) && preparing.size < 16) {
+            preparing.add(id);
+            void (async () => {
+              const checked = options.prepareJob ? await options.prepareJob(frame, lifetime.signal) : root;
+              lifetime.signal.throwIfAborted();
+              if (checked !== root) throw new Error("Prepared directory does not match job");
+              jobs.set(id, startRunner({ ...options, sessionId: id, roots: [checked], onStatus: undefined, reconnect: false, onClose: () => jobs.delete(id) }));
+            })().catch(() => {}).finally(() => preparing.delete(id));
+          }
         });
       } catch {} finally { options.onStatus?.(false); }
       await delay(Math.min(30_000, 1000 * 2 ** attempts++), undefined, { signal: lifetime.signal }).catch(() => {});
