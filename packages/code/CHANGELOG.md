@@ -1,5 +1,7 @@
 # 0.20.0
 
+Render Markdown in thinking text, separate turns with labeled rules, and group tool inputs and outputs in bordered blocks.
+
 Add awaited device preparation hooks, capability advertisement, and idle-only maintenance callbacks for embedding applications. Preserve legacy directory authorization and reap background processes when an executor closes.
 
 Anchor approval panels and mode pickers directly above the composer, including after resizing and with multiline drafts. Add Ctrl+G and `/approvals on|off` to update the cloud auto-approval setting, display its saved state, and follow resumed turns. Escape interrupts a running turn, including while a picker is open. Plans still require explicit approval.

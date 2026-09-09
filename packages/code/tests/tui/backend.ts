@@ -7,7 +7,7 @@ export function deferred() {
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
-export type Reply = { text?: string; tool?: { name: string; input: unknown }; wait?: Promise<void>; fail?: string; pending?: UIMessage; truncate?: boolean };
+export type Reply = { reasoning?: string; text?: string; tool?: { name: string; input: unknown }; wait?: Promise<void>; fail?: string; pending?: UIMessage; truncate?: boolean };
 
 export async function mockBackend(initialMessages: UIMessage[] = [], script?: (message: UIMessage) => Reply) {
   let messages = structuredClone(initialMessages);
@@ -76,6 +76,12 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
           emit({ type: "tool-output-denied", toolCallId: part.toolCallId });
         }
       }
+    }
+    if (reply.reasoning) {
+      emit({ type: "reasoning-start", id: "reasoning" });
+      emit({ type: "reasoning-delta", id: "reasoning", delta: reply.reasoning });
+      emit({ type: "reasoning-end", id: "reasoning" });
+      message.parts.push({ type: "reasoning", text: reply.reasoning });
     }
     if (reply.text) {
       emit({ type: "text-start", id: "text" });

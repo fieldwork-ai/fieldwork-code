@@ -327,3 +327,21 @@ it("stops the model with Escape even while the approval-mode picker is open", as
   expect(backend.approvalSettings).toHaveLength(0);
   expect(terminal.input).toBeDefined();
 });
+
+it("renders thinking Markdown and separates tool results from conversation turns", async () => {
+  await terminal.resize(100, 44);
+  await submit("/approvals on");
+  await screen("Auto-approve ON");
+  backend.replies.push({ reasoning: "**Inspecting the repository**\n\n- Read `README.md`.\n- Check the current branch.", text: "I’ll inspect the repository and check its current state.", tool: { name: "bash", input: { command: "git status --short" } } });
+  await submit("Inspect this repository");
+  await screen("Cloud auto-approved the tool.");
+  const lines = terminal.lines().join("\n");
+  expect(lines).toContain("Inspecting the repository");
+  expect(lines).toContain("README.md");
+  expect(lines).not.toContain("**Inspecting the repository**");
+  expect(lines).not.toContain("`README.md`");
+  backend.replies.push({ text: "The working tree is clean. **Ready for the next change.**" });
+  await submit("Summarize the result");
+  await screen("Ready for the next change.");
+  await terminal.screenshot("20-thinking-and-turn-dividers");
+});

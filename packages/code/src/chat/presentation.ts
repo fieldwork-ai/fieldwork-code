@@ -1,4 +1,4 @@
-import { Container, Markdown, Text, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Container, Markdown, Text, Spacer, truncateToWidth, visibleWidth, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
 import type { UIMessage } from "ai";
 import { terminalText, isUnsentMessage, type PendingApproval } from "./protocol.js";
 
@@ -80,23 +80,53 @@ const states: Record<string, string> = {
   "input-streaming": "Preparing", "input-available": "Running", "approval-requested": "Approval needed",
   "approval-responded": "Decision recorded", "output-available": "Done", "output-error": "Failed", "output-denied": "Denied",
 };
+function turnHeading(title: string): Component {
+  return {
+    invalidate() {},
+    render(width) {
+      const heading = truncateToWidth(`── ${title} `, Math.max(1, width - 2));
+      return ["", ` ${heading}${ink.muted("─".repeat(Math.max(0, width - visibleWidth(heading) - 2)))}`, ""];
+    },
+  };
+}
+function toolPanel(title: string, content: Component): Component {
+  return {
+    invalidate() { content.invalidate(); },
+    render(width) {
+      const inner = Math.max(1, width - 4);
+      const heading = truncateToWidth(` ${title} `, inner);
+      const edge = (left: string, middle: string, right: string) => ` ${ink.muted(left)}${middle}${ink.muted(right)}`;
+      return ["", edge("┌", heading + ink.muted("─".repeat(Math.max(0, inner - visibleWidth(heading)))), "┐"),
+        ...content.render(inner).map(line => {
+          const clipped = truncateToWidth(line, inner);
+          return edge("│", clipped + " ".repeat(Math.max(0, inner - visibleWidth(clipped))), "│");
+        }), edge("└", ink.muted("─".repeat(inner)), "┘"), ""];
+    },
+  };
+}
 function messageComponent(message: UIMessage): Component {
   const body = new Container();
   const failed = isUnsentMessage(message);
-  body.addChild(new Text(ink.bold(message.role === "user" ? "You" : "Fieldwork") + (failed ? ink.error(" · Send failed") : ""), 1, 1));
+  body.addChild(turnHeading(ink.bold(message.role === "user" ? "You" : "Fieldwork") + (failed ? ink.error(" · Send failed") : "")));
   for (const part of message.parts) {
     if (part.type === "text") body.addChild(message.role === "user" ? literal(part.text) : prose(part.text));
-    else if (part.type === "reasoning" && part.text) body.addChild(new Text(ink.muted(`Thinking\n${terminalText(part.text)}`), 1, 0));
+    else if (part.type === "reasoning" && part.text) {
+      body.addChild(new Text(ink.muted("Thinking"), 1, 0));
+      body.addChild(new Markdown(terminalText(part.text), 1, 0, markdownTheme, { color: ink.muted }));
+      body.addChild(new Spacer(1));
+    }
     else if ("toolCallId" in part && "state" in part) {
       const tool = "toolName" in part ? String(part.toolName) : part.type.slice(5);
       const input = record("input" in part ? part.input : undefined);
       const subject = input.command ?? input.file_path;
-      body.addChild(new Text(ink.muted(`${label(tool)} · ${states[part.state] ?? part.state}`), 1, 1));
-      if (subject) body.addChild(literal(readableValue(subject)));
+      const details = new Container();
+      if (subject) details.addChild(literal(readableValue(subject)));
       if ("output" in part && part.output !== undefined) {
         const output = record(part.output);
-        body.addChild(literal(readableValue(output.output ?? output.text ?? part.output)));
-      } else if ("errorText" in part && part.errorText) body.addChild(new Text(ink.error(terminalText(part.errorText)), 1, 0));
+        if (subject) details.addChild(new Text(ink.muted("Output"), 1, 1));
+        details.addChild(literal(readableValue(output.output ?? output.text ?? part.output)));
+      } else if ("errorText" in part && part.errorText) details.addChild(new Text(ink.error(terminalText(part.errorText)), 1, 0));
+      body.addChild(toolPanel(ink.bold(label(tool)) + ink.muted(` · ${states[part.state] ?? part.state}`), details));
     } else if (part.type === "file") body.addChild(literal(`${part.filename ?? part.mediaType}\n${part.url}`));
   }
   return body;
