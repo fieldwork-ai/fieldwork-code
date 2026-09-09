@@ -214,16 +214,17 @@ describe("TUI through keystrokes, HTTP, SSE and an ANSI terminal emulator", () =
     terminal.key("\x1b");
   });
 
-  it("stops a held stream and preserves the next draft", async () => {
+  it.each(["\x03", "\x1b"])("stops a held stream with %j and preserves the next draft", async key => {
     const gate = deferred();
     backend.replies.push({ text: "Waiting for a slow operation.", wait: gate.promise });
     await submit("Run a slow operation");
     await screen("Waiting for a slow operation.");
     terminal.type("My next draft");
-    terminal.key("\x03");
+    terminal.key(key);
     await vi.waitFor(() => expect(backend.requests).toHaveLength(1));
     await screen("My next draft");
     await screen("Stopped");
+    expect(backend.stops).toHaveLength(1);
     await terminal.settled();
     footer();
     gate.resolve();
@@ -296,4 +297,33 @@ it("anchors the approval above a multiline draft", async () => {
   approvalAboveEditor(4);
   await screen("Second draft line");
   await terminal.screenshot("18-approval-above-draft");
+});
+
+
+it("anchors the approval-mode picker above the textbox and cancels without changing the mode", async () => {
+  await submit("/approvals");
+  await screen("Tool approvals");
+  approvalAboveEditor();
+  await terminal.resize(80, 24);
+  approvalAboveEditor();
+  await terminal.screenshot("19-approval-mode-picker");
+  terminal.key("\x1b");
+  await screen("Enter send");
+  expect(backend.approvalSettings).toHaveLength(0);
+  expect(backend.stops).toHaveLength(0);
+  expect(terminal.input).toBeDefined();
+});
+
+it("stops the model with Escape even while the approval-mode picker is open", async () => {
+  const gate = deferred();
+  backend.replies.push({ text: "Still working", wait: gate.promise });
+  await submit("Inspect this project");
+  await screen("Still working");
+  await submit("/approvals");
+  await screen("Tool approvals");
+  terminal.key("\x1b");
+  await screen("Stopped");
+  expect(backend.stops).toHaveLength(1);
+  expect(backend.approvalSettings).toHaveLength(0);
+  expect(terminal.input).toBeDefined();
 });
