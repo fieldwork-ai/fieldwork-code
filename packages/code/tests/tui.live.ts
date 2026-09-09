@@ -8,7 +8,7 @@ import { localState } from "../src/chat/state.js";
 import type { Conversation } from "../src/chat/protocol.js";
 import { ScreenTerminal } from "./tui/terminal.js";
 
-it("auto-approves successive real local tools through the real app, then restores manual approval", async () => {
+it.each(["chain-bash-image", "parallel-bash"])("auto-approves %s through the real app, then restores manual approval", async scenario => {
   const file = process.env.FWCODE_TEST_CONFIG;
   if (!file) throw new Error("Start the app's scripts/fwcode-test-server.ts and set FWCODE_TEST_CONFIG to its credential file. See tests/tui/README.md.");
   const { apiUrl, token } = JSON.parse(await readFile(file, "utf8")) as { apiUrl: string; token: string };
@@ -33,12 +33,15 @@ it("auto-approves successive real local tools through the real app, then restore
   function submit(text: string) { terminal.type(text); terminal.key("\r"); }
   try {
     await screen("mock-toolgpt-1");
-    submit("Run [chain-bash-image]");
+    submit(`Run [${scenario}]`);
     await screen("Run shell command");
     await screen("Auto-approve tools");
-    await terminal.screenshot("live-01-first-tool-approval");
+    const parked = await conversation();
+    const pending = parked.messages!.flatMap(message => message.parts).filter(part => "state" in part && part.state === "approval-requested");
+    expect(pending).toHaveLength(scenario === "parallel-bash" ? 3 : 1);
+    await terminal.screenshot(`live-${scenario}-01-first-tool-approval`);
     terminal.key("\x1b[B"); terminal.key("\x1b[B"); terminal.key("\r");
-    await screen("Finished the tool run.");
+    await screen(scenario === "parallel-bash" ? "Tool output:" : "Finished the tool run.");
     await screen("Auto-approve ON");
     const first = await conversation();
     expect(first.auto_approve).toBe(true);
@@ -49,14 +52,14 @@ it("auto-approves successive real local tools through the real app, then restore
       expect(tools[index]).toMatchObject({ state: "output-available", output: { output: expect.stringContaining(`${word}\n`), exit_code: 0, success: true } });
     }
     expect(terminal.lines().join("\n")).not.toContain("Run shell command");
-    await terminal.screenshot("live-02-three-tools-complete");
+    await terminal.screenshot(`live-${scenario}-02-three-tools-complete`);
 
     submit("Run [bash: printf fourth > proof]");
     await vi.waitFor(async () => { expect(await readFile(path.join(root, "proof"), "utf8")).toBe("fourth"); }, { timeout: 30_000 });
     await screen("mock-toolgpt-1");
     expect((await conversation()).auto_approve).toBe(true);
     expect(terminal.lines().join("\n")).not.toContain("Run shell command");
-    await terminal.screenshot("live-03-next-turn-complete");
+    await terminal.screenshot(`live-${scenario}-03-next-turn-complete`);
 
     terminal.key("\x07");
     await screen("Auto-approve OFF");
@@ -66,7 +69,7 @@ it("auto-approves successive real local tools through the real app, then restore
     await screen("bash · Denied");
     await screen("mock-toolgpt-1");
     await expect(readFile(path.join(root, "denied"))).rejects.toThrow();
-    await terminal.screenshot("live-04-disabled-and-denied");
+    await terminal.screenshot(`live-${scenario}-04-disabled-and-denied`);
 
     terminal.key("\x07");
     await screen("Auto-approve ON");
@@ -79,9 +82,9 @@ it("auto-approves successive real local tools through the real app, then restore
     await screen("Approve plan");
     expect((await conversation()).messages!.flatMap(message => message.parts)).toContainEqual(expect.objectContaining({ type: "tool-present_plan", state: "approval-requested" }));
     expect(terminal.lines().join("\n")).not.toContain("Auto-approve tools");
-    await terminal.screenshot("live-05-plan-still-explicit");
+    await terminal.screenshot(`live-${scenario}-05-plan-still-explicit`);
   } catch (error) {
-    await terminal.screenshot("live-failure");
+    await terminal.screenshot(`live-${scenario}-failure`);
     throw error;
   } finally {
     if (terminal.input) { terminal.key("\x1b"); terminal.key("\x03"); }
