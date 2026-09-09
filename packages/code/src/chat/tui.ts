@@ -88,9 +88,13 @@ export async function runTui(
       const { title, component } = approvalContent(pending);
       const verdict = await select(title, component, [
         { value: "deny", label: "Deny" }, { value: "approve", label: "Approve" },
+        ...(!session.conversation.auto_approve ? [{ value: "auto-approve", label: "Auto-approve tools", description: "Enable for this conversation" }] : []),
       ]);
       if (!verdict) break;
-      try { await session.approve(verdict === "approve", pending.id); } catch (error) { report(error); break; }
+      try {
+        if (verdict === "auto-approve") await session.setAutoApprove(true);
+        else await session.approve(verdict === "approve", pending.id);
+      } catch (error) { report(error); break; }
     }
   }
   await new Promise<void>((resolve, reject) => {

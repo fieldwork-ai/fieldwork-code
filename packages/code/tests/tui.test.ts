@@ -242,12 +242,16 @@ describe("TUI through keystrokes, HTTP, SSE and an ANSI terminal emulator", () =
 });
 
 
-it("toggles cloud auto-approval from the pending panel and follows the resumed transcript", async () => {
+it.each(["shortcut", "dialog"])("enables cloud auto-approval through the %s and follows the resumed transcript", async control => {
   backend.replies.push({ tool: { name: "bash", input: { command: "git status" } } });
   await submit("Check the repository");
   await screen("Run shell command");
   await screen("Auto-approve OFF");
-  terminal.key("\x07");
+  if (control === "dialog") {
+    await screen("Auto-approve tools");
+    await terminal.screenshot("21-auto-approve-dialog-option");
+    terminal.key("\x1b[B"); terminal.key("\x1b[B"); terminal.key("\r");
+  } else terminal.key("\x07");
   await screen("Cloud resumed the tool.");
   await screen("Auto-approve ON");
   expect(backend.approvalSettings).toEqual([true]);
@@ -262,15 +266,18 @@ it("toggles cloud auto-approval from the pending panel and follows the resumed t
   expect(backend.approvalSettings).toEqual([true, false]);
 });
 
-it("keeps explicit plan approval after enabling auto-approval", async () => {
+it.each(["shortcut", "dialog"])("keeps explicit plan approval after enabling auto-approval through the %s", async control => {
   backend.replies.push({ tool: { name: "present_plan", input: { plan: "Review the changes" } } });
   await submit("Make a plan");
   await screen("Approve plan");
-  terminal.key("\x07");
+  if (control === "dialog") {
+    terminal.key("\x1b[B"); terminal.key("\x1b[B"); terminal.key("\r");
+  } else terminal.key("\x07");
   await screen("Auto-approve ON");
   await screen("Approve plan");
   expect(backend.requests).toHaveLength(1);
   approvalAboveEditor();
+  expect(terminal.lines().join("\n")).not.toContain("Auto-approve tools");
 });
 
 it("supports approval mode commands and preserves the saved mode when a toggle is rejected", async () => {
