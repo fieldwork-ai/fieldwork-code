@@ -143,7 +143,9 @@ export class CodeSession {
       resumed = result.resumed;
       this.events.status(`Auto-approve ${enabled ? "on" : "off"}. Plans still require approval.`);
     } finally { this.changingApprovals = false; }
-    if (resumed && !this.busy) {
+    if (!enabled || this.busy) return;
+    await this.reload();
+    if (resumed || this.conversation.turn_active) {
       this.busy = true;
       this.events.status("Working…");
       try {
@@ -155,6 +157,11 @@ export class CodeSession {
         } while (!this.lifetime.signal.aborted);
         this.events.status(this.pending.length ? "Approval needed" : this.conversation.model);
       } finally { this.busy = false; }
+    } else if (this.conversation.auto_approve) {
+      // Match the app's src/lib/chat/explicit-approval.ts: these decisions remain explicit even when tools are auto-approved.
+      const batch = this.pending.filter(part => part.tool !== "present_plan" && part.tool !== "ea_calendar_change");
+      // approve() accumulates decisions locally and sends one continuation after the last pending decision.
+      for (const part of batch) await this.approve(true, part.id);
     }
   }
   async stop() {

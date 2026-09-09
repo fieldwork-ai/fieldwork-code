@@ -7,7 +7,7 @@ export function deferred() {
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
-export type Reply = { reasoning?: string; text?: string; tool?: { name: string; input: unknown }; wait?: Promise<void>; fail?: string; pending?: UIMessage; truncate?: boolean };
+export type Reply = { reasoning?: string; text?: string; tool?: { name: string; input: unknown }; tools?: { name: string; input: unknown }[]; wait?: Promise<void>; fail?: string; pending?: UIMessage; truncate?: boolean };
 
 export async function mockBackend(initialMessages: UIMessage[] = [], script?: (message: UIMessage) => Reply) {
   let messages = structuredClone(initialMessages);
@@ -16,6 +16,7 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
   const stops: unknown[] = [];
   const approvalSettings: boolean[] = [];
   const approvalFailures: string[] = [];
+  const approvalBehavior = { resumeOnEnable: true };
   const replies: Reply[] = [];
   const requests: Record<string, unknown>[] = [];
   const active = new Set<ServerResponse>();
@@ -33,7 +34,7 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
       autoApprove = body.enabled;
       approvalSettings.push(autoApprove);
       let resumed = false;
-      if (autoApprove) for (const part of messages.at(-1)?.parts ?? []) {
+      if (autoApprove && approvalBehavior.resumeOnEnable) for (const part of messages.at(-1)?.parts ?? []) {
         if ("state" in part && part.state === "approval-requested" && part.type !== "tool-present_plan" && part.type !== "tool-ea_calendar_change") {
           Object.assign(part, { state: "output-available", output: { output: "Cloud resumed the tool." } });
           resumed = true;
@@ -91,16 +92,16 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
     if (reply.wait) await Promise.race([reply.wait, new Promise<void>(resolve => res.once("close", resolve))]);
     if (res.destroyed || res.writableEnded) return;
     if (reply.text) emit({ type: "text-end", id: "text" });
-    if (reply.tool) {
-      const toolCallId = `tool-${counter}`, approvalId = `approval-${counter}`;
-      emit({ type: "tool-input-available", toolCallId, toolName: reply.tool.name, input: reply.tool.input });
-      if (autoApprove && reply.tool.name !== "present_plan" && reply.tool.name !== "ea_calendar_change") {
+    for (const [index, tool] of [...(reply.tool ? [reply.tool] : []), ...(reply.tools ?? [])].entries()) {
+      const toolCallId = `tool-${counter}-${index}`, approvalId = `approval-${counter}-${index}`;
+      emit({ type: "tool-input-available", toolCallId, toolName: tool.name, input: tool.input });
+      if (autoApprove && tool.name !== "present_plan" && tool.name !== "ea_calendar_change") {
         const output = { output: "Cloud auto-approved the tool." };
         emit({ type: "tool-output-available", toolCallId, output });
-        message.parts.push({ type: `tool-${reply.tool.name}`, toolCallId, input: reply.tool.input, state: "output-available", output });
+        message.parts.push({ type: `tool-${tool.name}`, toolCallId, input: tool.input, state: "output-available", output });
       } else {
         emit({ type: "tool-approval-request", approvalId, toolCallId });
-        message.parts.push({ type: `tool-${reply.tool.name}`, toolCallId, input: reply.tool.input, state: "approval-requested", approval: { id: approvalId } });
+        message.parts.push({ type: `tool-${tool.name}`, toolCallId, input: tool.input, state: "approval-requested", approval: { id: approvalId } });
       }
     }
     save();
@@ -110,7 +111,7 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    replies, requests, approvalSettings, approvalFailures, stops,
+    replies, requests, approvalSettings, approvalFailures, approvalBehavior, stops,
     async close() { for (const stream of active) stream.end(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
   };
 }

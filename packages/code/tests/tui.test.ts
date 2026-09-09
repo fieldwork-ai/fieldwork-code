@@ -352,3 +352,42 @@ it("renders thinking Markdown and separates tool results from conversation turns
   await screen("Ready for the next change.");
   await terminal.screenshot("20-thinking-and-turn-dividers");
 });
+
+
+it.each(["shortcut", "dialog"])("approves the entire pending batch through the %s when the server only saves the setting", async control => {
+  backend.approvalBehavior.resumeOnEnable = false;
+  backend.replies.push({ tools: ["one", "two", "three"].map(word => ({ name: "bash", input: { command: `echo ${word}` } })) });
+  await submit("Run three commands");
+  await screen("Run shell command");
+  backend.replies.push({ text: "All three commands completed." });
+  if (control === "dialog") { terminal.key("\x1b[B"); terminal.key("\x1b[B"); terminal.key("\r"); }
+  else terminal.key("\x07");
+  await screen("All three commands completed.");
+  await screen("Auto-approve ON");
+  expect(backend.approvalSettings).toEqual([true]);
+  expect(backend.requests).toHaveLength(2);
+  const continuation = backend.requests[1].message as { role: string; parts: { approval?: { id: string; approved: boolean } }[] };
+  expect(continuation.role).toBe("assistant");
+  const approvals = continuation.parts.flatMap(part => part.approval ? [part.approval] : []);
+  expect(approvals).toHaveLength(3);
+  expect(approvals.every(approval => approval.approved)).toBe(true);
+  expect(new Set(approvals.map(approval => approval.id)).size).toBe(3);
+  expect(terminal.lines().join("\n")).not.toContain("Run shell command");
+  await terminal.screenshot(`22-client-batch-approval-${control}`);
+});
+
+it.each(["present_plan", "ea_calendar_change"])("keeps %s explicit in a mixed batch when the server does not resume", async tool => {
+  backend.approvalBehavior.resumeOnEnable = false;
+  backend.replies.push({ tools: [{ name: "bash", input: { command: "echo one" } }, { name: tool, input: { plan: "Review this decision." } }] });
+  await submit("Request tools and an explicit decision");
+  await screen("Run shell command");
+  terminal.key("\x1b[B"); terminal.key("\x1b[B"); terminal.key("\r");
+  await screen("Auto-approve ON");
+  await screen("Review this decision.");
+  expect(backend.requests).toHaveLength(1);
+  expect(terminal.lines().join("\n")).not.toContain("Auto-approve tools");
+  backend.replies.push({ text: "Explicit decision accepted." });
+  terminal.key("\x1b[B"); terminal.key("\r");
+  await screen("Explicit decision accepted.");
+  expect(backend.requests).toHaveLength(2);
+});

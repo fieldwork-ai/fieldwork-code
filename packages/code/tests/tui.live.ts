@@ -42,6 +42,7 @@ it.each(["chain-bash-image", "parallel-bash"])("auto-approves %s through the rea
     await terminal.screenshot(`live-${scenario}-01-first-tool-approval`);
     terminal.key("\x1b[B"); terminal.key("\x1b[B"); terminal.key("\r");
     await screen(scenario === "parallel-bash" ? "Tool output:" : "Finished the tool run.");
+    await screen("mock-toolgpt-1");
     await screen("Auto-approve ON");
     const first = await conversation();
     expect(first.auto_approve).toBe(true);
