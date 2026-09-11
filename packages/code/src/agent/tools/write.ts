@@ -1,6 +1,7 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { resolveRoot, workspacePath } from './workspace.js';
 import { dirname } from 'node:path';
+import { withFileMutation } from './file-mutation.js';
 
 interface WriteParams {
   file_path: string;
@@ -8,7 +9,9 @@ interface WriteParams {
   workdir?: string;
 }
 
-export async function write(params: WriteParams) {
+export function write(params: WriteParams) { return withFileMutation(() => writeUnlocked(params)); }
+
+async function writeUnlocked(params: WriteParams) {
   const { file_path, content, workdir } = params;
   const root = resolveRoot(workdir);
   if (!root.ok) {

@@ -1,3 +1,9 @@
+# 0.22.0
+
+Add a TypeScript-only Codex-style patch executor at `/apply-patch`, advertised as `apply-patch-v1`. Approval covers patch text; execution validates current files and applies without pre-approval staging or caches. Support multi-file add/update/delete/move, exact unambiguous context, BOM and line-ending preservation, exclusive destinations, bounded inputs, and explicit partial/uncertain failure reporting. Serialize patches with write/edit and render patch text in terminal approvals.
+
+Add independently authored operation/race/failure tests and a pinned upstream fixture corpus with explicit safety divergences, running on Linux, macOS, and Windows. No Rust runtime or implementation is included.
+
 # 0.20.0
 
 Render Markdown in thinking text, separate turns with labeled rules, and group tool inputs and outputs in bordered blocks.
