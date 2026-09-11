@@ -1,8 +1,12 @@
-# 0.22.0
+# 0.21.0
 
 Add a TypeScript-only Codex-style patch executor at `/apply-patch`, without capability negotiation or feature flags. Approval covers patch text; execution validates current files and applies without pre-approval staging or caches. Support multi-file add/update/delete/move, exact unambiguous context, BOM and line-ending preservation, exclusive destinations, bounded inputs, and explicit partial/uncertain failure reporting. Serialize patches with write/edit and render patch text in terminal approvals.
 
 Add independently authored operation/race/failure tests and a pinned upstream fixture corpus with explicit safety divergences, running on Linux, macOS, and Windows. No Rust runtime or implementation is included.
+
+Add opt-in persistent login shells for macOS desktop runners. Advertise `persistent-shell-v1`; model `/bash` calls with `shell_session: true` reuse a session-scoped Zsh or Bash shell, while unmarked internal operations and foreground CLI/cloud calls retain isolated execution. Preserve cwd, exports, aliases and functions across calls and desktop executor stream turnover. Serialize commands, report shell creation/reset, retain partial failure output, and never replay interrupted commands.
+
+Expire idle shells after 30 minutes, keep shells with running jobs alive, and reap owned processes on explicit teardown or device disconnection. Cancellation and timeouts retire the affected shell; the next command creates a fresh one. Per-call environment overrides are restored before the next command. Add Bash/Zsh lifecycle tests, an SSE stream-turnover test, and macOS CI coverage.
 
 # 0.20.0
 

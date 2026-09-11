@@ -1,6 +1,6 @@
 {
   "name": "@fieldwork-ai/fieldwork-code",
-  "version": "0.22.0",
+  "version": "0.21.0",
   "description": "Fieldwork Code: terminal chat with built-in local tools",
   "license": "(MIT OR Apache-2.0)",
   "type": "module",

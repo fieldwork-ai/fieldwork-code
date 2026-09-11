@@ -20,6 +20,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm --filter @fieldwork-ai/fieldwork-code exec vitest run tests/apply-patch.test.ts tests/patch-upstream.test.ts
+  macos-shell:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @fieldwork-ai/fieldwork-code exec vitest run tests/shell-session.test.ts tests/device-bootstrap.test.ts tests/foreground.test.ts
   test:
     runs-on: ubuntu-latest
     steps:
