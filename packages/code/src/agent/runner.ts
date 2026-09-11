@@ -2,9 +2,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { routes } from "./router.js";
 import { runnerRoots, runnerSignal, resolveRoot } from "./tools/workspace.js";
 import { interruptForeground, reapBackground } from "./tools/bash.js";
+import { runnerShell, ShellSessionManager, PERSISTENT_SHELL_CAPABILITY } from "./tools/shell-session.js";
 
 export interface ConnectionOptions { apiUrl: string; getToken: () => Promise<string>; onStatus?: (online: boolean) => void }
-export interface RunnerOptions extends ConnectionOptions { sessionId: string; roots: string[]; reconnect?: boolean; onClose?: () => void }
+export interface RunnerOptions extends ConnectionOptions { sessionId: string; roots: string[]; reconnect?: boolean; onClose?: () => void; shellManager?: ShellSessionManager }
 async function request(options: ConnectionOptions, path: string, signal: AbortSignal, init: RequestInit = {}) {
   const response = await fetch(`${options.apiUrl.replace(/\/$/, "")}${path}`, { ...init, signal, headers: { ...init.headers, Authorization: `Bearer ${await options.getToken()}` } });
   if (!response.ok) throw new Error(`Executor request failed (${response.status})`);
@@ -59,7 +60,12 @@ export function startRunner(options: RunnerOptions): { stop: () => void } {
             const result = await runnerRoots.run(options.roots, async () => {
               const checked = resolveRoot(params.workdir);
               if (!checked.ok) return { success: false, error: checked.error };
-              try { return await runnerSignal.run(callSignal, () => routes[`POST ${route}`]({ ...params, workdir: checked.root })); }
+              try {
+                const execute = () => runnerSignal.run(callSignal, () => routes[`POST ${route}`]({ ...params, workdir: checked.root }));
+                return await (options.shellManager
+                  ? runnerShell.run({ manager: options.shellManager, key: options.sessionId, root: checked.root }, execute)
+                  : execute());
+              }
               catch (error) { return { success: false, error: error instanceof Error ? error.message : "Local execution failed" }; }
             });
             await request(options, path, callSignal, { method: "POST", headers, body: JSON.stringify(result) });
@@ -67,6 +73,7 @@ export function startRunner(options: RunnerOptions): { stop: () => void } {
         });
       } catch {} finally {
         connection.abort(); options.onStatus?.(false);
+        options.shellManager?.interrupt(options.sessionId);
         for (const root of options.roots) interruptForeground(root);
       }
       if (options.reconnect === false || lifetime.signal.aborted) break;
@@ -76,7 +83,7 @@ export function startRunner(options: RunnerOptions): { stop: () => void } {
     options.onClose?.();
   }
   void connect();
-  return { stop() { lifetime.abort(); active?.abort(); for (const root of options.roots) { interruptForeground(root); reapBackground(root); } } };
+  return { stop() { lifetime.abort(); active?.abort(); options.shellManager?.dispose(options.sessionId); for (const root of options.roots) { interruptForeground(root); reapBackground(root); } } };
 }
 export interface DeviceRunnerOptions extends ConnectionOptions {
   roots: string[];
@@ -85,19 +92,22 @@ export interface DeviceRunnerOptions extends ConnectionOptions {
   capabilities?: string[];
 }
 export function startDeviceRunner(options: DeviceRunnerOptions): { stop: () => void } {
+  const shellManager = process.platform === 'darwin' ? new ShellSessionManager() : undefined;
+  const capabilities = [...(options.capabilities ?? []), ...(shellManager ? [PERSISTENT_SHELL_CAPABILITY] : [])];
   const lifetime = new AbortController(), jobs = new Map<string, ReturnType<typeof startRunner>>();
   const preparing = new Set<string>(), controls = new Set<string>();
   void (async () => {
     let attempts = 0;
     while (!lifetime.signal.aborted) {
       try {
-        await events(await request(options, "/api/runners/events", lifetime.signal, { headers: { "X-Runner-Capabilities": options.capabilities?.join(",") ?? "" } }), frame => {
+        await events(await request(options, "/api/runners/events", lifetime.signal, { headers: { "X-Runner-Capabilities": capabilities.join(",") } }), frame => {
           if (frame.type === "ready") { attempts = 0; options.onStatus?.(true); return; }
           if (frame.type === "heartbeat") return;
           if (frame.type === "control" && typeof frame.id === "string" && options.onControl) {
             const id = frame.id;
             if (!jobs.size && !preparing.size && !controls.has(id) && controls.size < 16) {
               controls.add(id);
+              shellManager?.close();
               void options.onControl(frame, lifetime.signal).catch(() => {}).finally(() => controls.delete(id));
             }
             return;
@@ -111,13 +121,13 @@ export function startDeviceRunner(options: DeviceRunnerOptions): { stop: () => v
               const checked = options.prepareJob ? await options.prepareJob(frame, lifetime.signal) : root;
               lifetime.signal.throwIfAborted();
               if (checked !== root) throw new Error("Prepared directory does not match job");
-              jobs.set(id, startRunner({ ...options, sessionId: id, roots: [checked], onStatus: undefined, reconnect: false, onClose: () => jobs.delete(id) }));
+              jobs.set(id, startRunner({ ...options, shellManager, sessionId: id, roots: [checked], onStatus: undefined, reconnect: false, onClose: () => jobs.delete(id) }));
             })().catch(() => {}).finally(() => preparing.delete(id));
           }
         });
-      } catch {} finally { options.onStatus?.(false); }
+      } catch {} finally { shellManager?.close(); options.onStatus?.(false); }
       await delay(Math.min(30_000, 1000 * 2 ** attempts++), undefined, { signal: lifetime.signal }).catch(() => {});
     }
   })();
-  return { stop() { lifetime.abort(); for (const job of jobs.values()) job.stop(); jobs.clear(); } };
+  return { stop() { lifetime.abort(); for (const job of jobs.values()) job.stop(); jobs.clear(); shellManager?.close(); } };
 }

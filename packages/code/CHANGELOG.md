@@ -1,3 +1,9 @@
+# 0.21.0
+
+Add opt-in persistent login shells for macOS desktop runners. Advertise `persistent-shell-v1`; model `/bash` calls with `shell_session: true` reuse a session-scoped Zsh or Bash shell, while unmarked internal operations and foreground CLI/cloud calls retain isolated execution. Preserve cwd, exports, aliases and functions across calls and desktop executor stream turnover. Serialize commands, report shell creation/reset, retain partial failure output, and never replay interrupted commands.
+
+Expire idle shells after 30 minutes, keep shells with running jobs alive, and reap owned processes on explicit teardown or device disconnection. Cancellation and timeouts retire the affected shell; the next command creates a fresh one. Per-call environment overrides are restored before the next command. Add Bash/Zsh lifecycle tests, an SSE stream-turnover test, and macOS CI coverage.
+
 # 0.20.0
 
 Render Markdown in thinking text, separate turns with labeled rules, and group tool inputs and outputs in bordered blocks.

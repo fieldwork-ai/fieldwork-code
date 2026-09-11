@@ -1,9 +1,12 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { resolveRoot, WORKSPACE, runnerSignal } from './workspace.js';
+import { runnerShell } from './shell-session.js';
 
 interface BashParams {
   command: string;
+  shell_session?: boolean;
+  initial_cwd?: string;
   description?: string;
   timeout?: number;
   run_in_background?: boolean;
@@ -43,10 +46,12 @@ const foregroundGroups = new Map<string, Set<ForegroundRun>>();
  * shell's `exit` fires, so its /bash request returns normally with the partial
  * output plus a stop marker rather than hanging or 500ing. */
 export function interruptForeground(workdir: string): { killed: number } {
+  const scope = runnerShell.getStore();
+  const shellKilled = scope?.manager.interrupt(scope.key) ?? 0;
   const root = resolveRoot(workdir);
   const key = root.ok ? root.root : workdir;
   const runs = foregroundGroups.get(key);
-  let killed = 0;
+  let killed = shellKilled;
   if (runs) {
     for (const run of runs) {
       if (run.interrupt()) killed++;
@@ -84,10 +89,12 @@ export function liveBackgroundGroups(): number {
 }
 
 export function reapBackground(workdir: string): { killed: number } {
+  const scope = runnerShell.getStore();
+  const shellKilled = scope?.manager.dispose(scope.key) ?? 0;
   const root = resolveRoot(workdir);
   const key = root.ok ? root.root : workdir;
   const pids = backgroundGroups.get(key);
-  let killed = 0;
+  let killed = shellKilled;
   if (pids) {
     for (const pid of pids) {
       try {
@@ -125,6 +132,13 @@ export async function bash(params: BashParams) {
     return { success: false, error: root.error };
   }
   const cwd = root.root;
+  if (params.shell_session) {
+    const scope = runnerShell.getStore();
+    if (!scope || scope.root !== cwd) return { success: false, error: 'Persistent shell is unavailable on this executor; command was not run.' };
+    const initial = resolveRoot(params.initial_cwd ?? cwd);
+    if (!initial.ok) return { success: false, error: initial.error };
+    return scope.manager.execute(scope.key, cwd, { ...params, initial_cwd: initial.root }, runnerSignal.getStore());
+  }
   // Conversation workdirs are created lazily by their first command.
   if (cwd !== WORKSPACE) {
     await mkdir(cwd, { recursive: true });

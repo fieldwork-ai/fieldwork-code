@@ -25,6 +25,14 @@ Packages release independently. Bump the changed package, update its changelog, 
 
 Shared handlers are exposed through `@fieldwork-ai/fieldwork-code/agent/runner` for desktop hosts and `@fieldwork-ai/fieldwork-code/agent/router` for the compute HTTP service. The agent uses `bash` and `tar`, and `rsvg-convert` with installed fonts for rasterized SVGs. On Ubuntu, install `librsvg2-bin fonts-liberation` for the full test suite.
 
+### Desktop shell sessions
+
+On macOS, `startDeviceRunner` advertises `persistent-shell-v1`. A `/bash` request with `shell_session: true` uses the authenticated executor session's persistent login shell; `initial_cwd` sets its initial directory only. Zsh and Bash startup files run once. Later commands retain cwd, environment, aliases and functions and serialize within the same session. Relative file-tool paths remain anchored to the request workdir, not the shell's cwd. Foreground CLI clients, cloud handlers and unmarked internal calls retain isolated Bash execution.
+
+The device host owns `ShellSessionManager`, not the short-lived SSE job stream. Idle shells expire after 30 minutes; live process-group children defer expiry. A shell exit, cancellation or timeout returns partial output without replay, and the next call creates a fresh shell. Results carry `shell`, `shell_session_id`, `shell_created`, and foreground `cwd`. Explicit `/reap`, device shutdown/disconnection and maintenance close shells and reap their process groups. `ShellSessionManager` accepts an `idleMs` override for embedding/testing.
+
+Commands are sourced in the shell itself with stdin disconnected; this is not a terminal for interactive applications. Job control and history expansion are disabled during initialization, and completion is carried in private files separately from stdout/stderr. Background calls inherit the shell state in a child without mutating the parent; their default output is discarded, so redirect output explicitly when needed. Call-scoped environment overrides are restored afterward, and `FWCODE_TOKEN` is not passed to the shell. Shells are not an OS sandbox.
+
 PDF interpretation belongs to the private Fieldwork app. It supplies a bounded read program through the existing process runner, using Poppler on the selected machine; no PDF parser or page-formatting implementation ships in this package.
 
 ## TUI development and visual regression checks

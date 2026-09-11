@@ -10,17 +10,20 @@ afterEach(async () => { vi.unstubAllEnvs(); for (const cleanup of cleanups.splic
 async function setup(device = false) {
   const root = await mkdtemp(path.join(tmpdir(), "fwcode-foreground-"));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
-  let stream: ServerResponse;
+  let stream: ServerResponse, control: ServerResponse;
+  let connections = 0;
   const ready = Promise.withResolvers<void>();
   const pending = new Map<string, { input: object; done: (value: Record<string, unknown>) => void }>();
   const server = createServer(async (req, res) => {
     expect(req.headers.authorization).toBe("Bearer token");
     if (req.url === "/api/runners/events") {
+      control = res;
       res.writeHead(200, { "Content-Type": "text/event-stream" });
       res.write(`data: ${JSON.stringify({ type: "ready" })}\n\n`);
       res.write(`data: ${JSON.stringify({ type: "start", session_id: "session", root })}\n\n`);
     } else if (req.url?.endsWith("/events")) {
       stream = res;
+      connections++;
       res.writeHead(200, { "Content-Type": "text/event-stream" });
       res.write(`data: ${JSON.stringify({ type: "ready", connection_id: "connection" })}\n\n`);
       ready.resolve();
@@ -45,7 +48,14 @@ async function setup(device = false) {
   const call = (route: string, params: object, id = `request-${++sequence}`) => new Promise<Record<string, unknown>>(done => {
     pending.set(id, { input: { ...params, workdir: root }, done }); send({ type: "request", id, path: route });
   });
-  return { root, runner, call, send, disconnect: () => stream.end() };
+  return { root, runner, call, send, disconnect: () => stream.end(), restartJob: async () => {
+    const previous = connections;
+    stream.end();
+    await vi.waitFor(() => {
+      control.write(`data: ${JSON.stringify({ type: 'start', session_id: 'session', root })}\n\n`);
+      expect(connections).toBeGreaterThan(previous);
+    });
+  } };
 }
 it("stops session-owned background processes", async () => {
   const { root, runner, call } = await setup();
@@ -80,6 +90,23 @@ it.each(["cancel", "disconnect"])("interrupts foreground work on %s without repl
   await new Promise(resolve => setTimeout(resolve, 650));
   await expect(readFile(path.join(root, "survived"))).rejects.toThrow();
 });
+it.skipIf(process.platform !== 'darwin')('keeps a desktop shell across executor streams while internal calls stay isolated', async () => {
+  vi.stubEnv('SHELL', '/bin/zsh');
+  vi.stubEnv('FWCODE_TOKEN', 'client-secret');
+  const { root, call, restartJob } = await setup(true);
+  vi.stubEnv('ZDOTDIR', root);
+  const first = await call('/bash', { command: 'export RETAINED=yes; printf "%s" "$FWCODE_TOKEN"', shell_session: true });
+  expect(first.success).toBe(true); expect(first.stdout).toBe('');
+  await restartJob();
+  const second = await call('/bash', { command: 'printf "%s" "$RETAINED"', shell_session: true });
+  expect(second.stdout).toBe('yes'); expect(second.shell_session_id).toBe(first.shell_session_id);
+  const isolated = await call('/bash', { command: 'printf "%s" "${RETAINED-unset}"; export RETAINED=no' });
+  expect(isolated.stdout).toBe('unset');
+  expect((await call('/bash', { command: 'printf "%s" "$RETAINED"', shell_session: true })).stdout).toBe('yes');
+  await call('/reap', {});
+  expect((await call('/bash', { command: 'printf "%s" "${RETAINED-unset}"', shell_session: true })).stdout).toBe('unset');
+});
+
 it("starts an Electron job from the control stream using the same executor", async () => {
   const { root, call } = await setup(true);
   expect((await call("/write", { file_path: "electron.txt", content: "shared executor" })).success).toBe(true);
