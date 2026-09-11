@@ -16,7 +16,6 @@ export const routes: Record<string, Handler> = {
   'POST /write': write,
   'POST /edit': edit,
   'POST /apply-patch': async params => ({ ...await applyPatch(params) }),
-  'POST /capabilities': async () => ({ success: true, capabilities: ['apply-patch-v1'] }),
   'POST /bash': bash,
   'POST /upload': upload,
   'POST /upload-to-s3': uploadToS3,

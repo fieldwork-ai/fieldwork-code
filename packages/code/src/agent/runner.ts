@@ -6,7 +6,7 @@ import { interruptForeground, reapBackground } from "./tools/bash.js";
 export interface ConnectionOptions { apiUrl: string; getToken: () => Promise<string>; onStatus?: (online: boolean) => void }
 export interface RunnerOptions extends ConnectionOptions { sessionId: string; roots: string[]; reconnect?: boolean; onClose?: () => void }
 async function request(options: ConnectionOptions, path: string, signal: AbortSignal, init: RequestInit = {}) {
-  const response = await fetch(`${options.apiUrl.replace(/\/$/, "")}${path}`, { ...init, signal, headers: { ...init.headers, 'X-Runner-Capabilities': [...new Set(['apply-patch-v1', ...((init.headers as Record<string, string> | undefined)?.['X-Runner-Capabilities']?.split(',') ?? [])])].filter(Boolean).join(','), Authorization: `Bearer ${await options.getToken()}` } });
+  const response = await fetch(`${options.apiUrl.replace(/\/$/, "")}${path}`, { ...init, signal, headers: { ...init.headers, Authorization: `Bearer ${await options.getToken()}` } });
   if (!response.ok) throw new Error(`Executor request failed (${response.status})`);
   return response;
 }

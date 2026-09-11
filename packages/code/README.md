@@ -29,7 +29,7 @@ PDF interpretation belongs to the private Fieldwork app. It supplies a bounded r
 
 ## Patch execution
 
-`POST /apply-patch` accepts `{ "patch": "*** Begin Patch\n...\n*** End Patch", "workdir": "..." }` and an optional `initial_cwd` for relative patch paths. `/capabilities` reports `apply-patch-v1`; device and foreground SSE connections advertise it too. The app presents the JSON patch string for approval and sends that same patch to this endpoint only after approval. There is no preparation endpoint, approval cache, expiring change set, or Rust dependency.
+`POST /apply-patch` accepts `{ "patch": "*** Begin Patch\n...\n*** End Patch", "workdir": "..." }` and an optional `initial_cwd` for relative patch paths. The tool is built in without capability negotiation or a feature flag. The app presents the JSON patch string for approval and sends that same patch to this endpoint only after approval. There is no preparation endpoint, approval cache, expiring change set, or Rust dependency.
 
 The parser accepts Codex-style Add File, Update File, Delete File, Move to, `@@` anchors, context/removal/addition lines and End of File markers. All files are validated before mutation. Matching is exact and ambiguous context is rejected. Add/move destinations must not exist; symlinks, directory operations, invalid UTF-8 and binary files are rejected. Existing context bytes, BOM and final-newline state survive; new lines use the first existing line-ending style (LF for empty files). Limits are 1 MiB patch input, 100 operations, 4 MiB per file and 16 MiB aggregate before/after contents.
 
