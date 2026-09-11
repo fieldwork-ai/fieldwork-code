@@ -13,7 +13,7 @@ it("waits for preparation, deduplicates notifications, and advertises capabiliti
   runners.push(startDeviceRunner({ apiUrl: "https://example.test", roots: ["/working"], capabilities: ["managed-worktrees-v1"], getToken: async () => "token", prepareJob }));
   await vi.waitFor(() => expect(prepareJob).toHaveBeenCalledTimes(1));
   expect(fetcher).toHaveBeenCalledTimes(1);
-  expect(new Headers(fetcher.mock.calls[0][1]?.headers).get("X-Runner-Capabilities")).toBe("managed-worktrees-v1");
+  expect(new Headers(fetcher.mock.calls[0][1]?.headers).get("X-Runner-Capabilities")).toBe(process.platform === 'darwin' ? "managed-worktrees-v1,persistent-shell-v1" : "managed-worktrees-v1");
   release("/working/conversation");
   await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
 });

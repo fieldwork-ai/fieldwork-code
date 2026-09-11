@@ -1,0 +1,11 @@
+OpenAI Codex patch scenario fixtures
+Copyright 2025 OpenAI
+Licensed under Apache License 2.0 (see LICENSE in this directory).
+
+Copied without content modification from openai/codex commit
+ da20788df913189878ebca7f4963d8a363ee6bf2
+ codex-rs/apply-patch/tests/fixtures/scenarios/
+
+The surrounding TypeScript implementation and test harness are Fieldwork's own.
+The test harness explicitly names policy differences instead of silently changing
+upstream expectations. No Rust implementation or runtime is included.

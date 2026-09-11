@@ -25,7 +25,25 @@ Packages release independently. Bump the changed package, update its changelog, 
 
 Shared handlers are exposed through `@fieldwork-ai/fieldwork-code/agent/runner` for desktop hosts and `@fieldwork-ai/fieldwork-code/agent/router` for the compute HTTP service. The agent uses `bash` and `tar`, and `rsvg-convert` with installed fonts for rasterized SVGs. On Ubuntu, install `librsvg2-bin fonts-liberation` for the full test suite.
 
+### Desktop shell sessions
+
+On macOS, `startDeviceRunner` advertises `persistent-shell-v1`. A `/bash` request with `shell_session: true` uses the authenticated executor session's persistent login shell; `initial_cwd` sets its initial directory only. Zsh and Bash startup files run once. Later commands retain cwd, environment, aliases and functions and serialize within the same session. Relative file-tool paths remain anchored to the request workdir, not the shell's cwd. Foreground CLI clients, cloud handlers and unmarked internal calls retain isolated Bash execution.
+
+The device host owns `ShellSessionManager`, not the short-lived SSE job stream. Idle shells expire after 30 minutes; live process-group children defer expiry. A shell exit, cancellation or timeout returns partial output without replay, and the next call creates a fresh shell. Results carry `shell`, `shell_session_id`, `shell_created`, and foreground `cwd`. Explicit `/reap`, device shutdown/disconnection and maintenance close shells and reap their process groups. `ShellSessionManager` accepts an `idleMs` override for embedding/testing.
+
+Commands are sourced in the shell itself with stdin disconnected; this is not a terminal for interactive applications. Job control and history expansion are disabled during initialization, and completion is carried in private files separately from stdout/stderr. Background calls inherit the shell state in a child without mutating the parent; their default output is discarded, so redirect output explicitly when needed. Call-scoped environment overrides are restored afterward, and `FWCODE_TOKEN` is not passed to the shell. Shells are not an OS sandbox.
+
 PDF interpretation belongs to the private Fieldwork app. It supplies a bounded read program through the existing process runner, using Poppler on the selected machine; no PDF parser or page-formatting implementation ships in this package.
+
+## Patch execution
+
+`POST /apply-patch` accepts `{ "patch": "*** Begin Patch\n...\n*** End Patch", "workdir": "..." }` and an optional `initial_cwd` for relative patch paths. The tool is built in without capability negotiation or a feature flag. The app presents the JSON patch string for approval and sends that same patch to this endpoint only after approval. There is no preparation endpoint, approval cache, expiring change set, or Rust dependency.
+
+The parser accepts Codex-style Add File, Update File, Delete File, Move to, `@@` anchors, context/removal/addition lines and End of File markers. All files are validated before mutation. Matching is exact and ambiguous context is rejected. Add/move destinations must not exist; symlinks, directory operations, invalid UTF-8 and binary files are rejected. Existing context bytes, BOM and final-newline state survive; new lines use the first existing line-ending style (LF for empty files). Limits are 1 MiB patch input, 100 operations, 4 MiB per file and 16 MiB aggregate before/after contents.
+
+Execution serializes with the executor's write/edit handlers and stages replacement files beside their destinations during the approved call. A single file replacement is atomic where the filesystem supports it; the whole batch is not a transaction. Cooperating locks cannot prevent external programs racing filesystem calls. Validation failures leave target files unchanged; I/O failures report completed paths and `failed`, `partial`, or `uncertain` status. New parent directories can remain after a failure. Cancellation before commit stops execution; once commit begins the executor finishes the batch. A lost connection is an uncertain outcome, never grounds for blind replay. Insertion-only hunks are not idempotent; the app's dispatch ledger protects retries.
+
+`tests/patch-upstream.test.ts` runs the pinned OpenAI fixture corpus directly against this TypeScript implementation, without invoking Codex. Intentional divergences are named in the harness: refuse overwrites, validate all operations before applying the first, reject ambiguous/fuzzy matches, and preserve absent final newlines. `tests/apply-patch.test.ts` adds byte-level, authorization, race, fault-injection and generated cases. CI runs the contract on Linux, macOS and Windows.
 
 ## TUI development and visual regression checks
 

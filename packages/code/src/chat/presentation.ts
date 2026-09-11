@@ -63,6 +63,10 @@ export function approvalContent(approval: PendingApproval): { title: string; com
       body.addChild(new Text(after.split("\n").map(line => ink.success(`+ ${line}`)).join("\n"), 1, 0));
       break;
     }
+    case "apply_patch":
+      title = "Apply file patch";
+      body.addChild(literal(field("patch")));
+      break;
     case "present_plan":
       title = "Approve plan";
       body.addChild(prose(field("plan")));

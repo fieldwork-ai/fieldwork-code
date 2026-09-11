@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolveRoot, workspacePath } from './workspace.js';
+import { withFileMutation } from './file-mutation.js';
 
 interface EditParams {
   file_path: string;
@@ -9,7 +10,9 @@ interface EditParams {
   workdir?: string;
 }
 
-export async function edit(params: EditParams) {
+export function edit(params: EditParams) { return withFileMutation(() => editUnlocked(params)); }
+
+async function editUnlocked(params: EditParams) {
   const { file_path, old_string, new_string, replace_all, workdir } = params;
   const root = resolveRoot(workdir);
   if (!root.ok) {

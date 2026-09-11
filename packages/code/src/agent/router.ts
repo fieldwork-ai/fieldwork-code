@@ -1,6 +1,7 @@
 import { read } from './tools/read.js';
 import { write } from './tools/write.js';
 import { edit } from './tools/edit.js';
+import { applyPatch } from './tools/apply-patch.js';
 import { bash, interruptForeground, reapBackground } from './tools/bash.js';
 import { upload } from './tools/upload.js';
 import { uploadToS3 } from './tools/upload-to-s3.js';
@@ -14,6 +15,7 @@ export const routes: Record<string, Handler> = {
   'POST /read': read,
   'POST /write': write,
   'POST /edit': edit,
+  'POST /apply-patch': async params => ({ ...await applyPatch(params) }),
   'POST /bash': bash,
   'POST /upload': upload,
   'POST /upload-to-s3': uploadToS3,
