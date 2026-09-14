@@ -1,7 +1,7 @@
 import {
-
   type AssistantMessage,
   type AssistantMessageEvent,
+  type CodexErrorDetails,
   type Context,
   type ImageContent,
   type CodexRuntime,
@@ -515,7 +515,7 @@ function streamParts(event: AssistantMessageEvent): LanguageModelV4StreamPart[] 
         ...(event.error.responseId
           ? [{ type: "response-metadata" as const, id: event.error.responseId }]
           : []),
-        { type: "error", error: new Error(event.error.errorMessage ?? event.reason) },
+        { type: "error", error: new OpenAISubscriptionError(event.error.errorMessage ?? event.reason, event.error.errorDetails) },
         {
           type: "finish",
           usage: usageOf(event.error.usage),
@@ -523,6 +523,14 @@ function streamParts(event: AssistantMessageEvent): LanguageModelV4StreamPart[] 
           providerMetadata: transportMetadata(),
         },
       ];
+  }
+}
+
+/** The failure the AI SDK receives, carrying what the backend said about it. */
+export class OpenAISubscriptionError extends Error {
+  constructor(message: string, readonly details?: CodexErrorDetails) {
+    super(message);
+    this.name = "OpenAISubscriptionError";
   }
 }
 
@@ -546,7 +554,7 @@ export function createOpenAISubscriptionModel(
         optionsOf(options, config.accessToken, config.transport),
       );
       if (message.stopReason === "error" || message.stopReason === "aborted") {
-        throw new Error(message.errorMessage ?? `OpenAI subscription ${message.stopReason}`);
+        throw new OpenAISubscriptionError(message.errorMessage ?? `OpenAI subscription ${message.stopReason}`, message.errorDetails);
       }
       return generateResult(message, warningsOf(options));
     },
