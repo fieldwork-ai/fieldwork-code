@@ -1,7 +1,17 @@
 import { websocketEvents } from "./websocket.js";
 import { randomUUID, createHash } from "node:crypto";
 import { zstdCompressSync } from "node:zlib";
-import type { AssistantMessage, AssistantMessageEvent, CodexClientOptions, CodexRuntime, Context, ImageContent, Model, ProviderStreamOptions, TextContent, ToolCall } from "./client-types.js";
+import type { AssistantMessage, AssistantMessageEvent, CodexClientOptions, CodexErrorDetails, CodexRuntime, Context, ImageContent, Model, ProviderStreamOptions, TextContent, ToolCall } from "./client-types.js";
+
+export class CodexRequestError extends Error {
+  constructor(message: string, readonly details: CodexErrorDetails) { super(message); this.name = "CodexRequestError"; }
+}
+const token = (value: unknown): string | undefined => typeof value === "string" ? value.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 100) || undefined : undefined;
+function errorDetailsOf(status: number | undefined, error: unknown): CodexErrorDetails {
+  const body = (error && typeof error === "object" ? error : {}) as { code?: unknown; type?: unknown; plan_type?: unknown; resets_at?: unknown };
+  const resetsAt = typeof body.resets_at === "number" && Number.isFinite(body.resets_at) ? body.resets_at : undefined;
+  return { ...(status !== undefined && { status }), ...(token(body.code) && { code: token(body.code) }), ...(token(body.type) && { type: token(body.type) }), ...(token(body.plan_type) && { planType: token(body.plan_type) }), ...(resetsAt !== undefined && { resetsAt }) };
+}
 
 export function normalizeCodexBaseUrl(value = "https://chatgpt.com/backend-api/codex"): string {
   const url = new URL(value);
@@ -139,9 +149,10 @@ export class CodexClient implements CodexRuntime {
       } else {
         const response = await (this.config.fetchFn ?? fetch)(request.url, { method: "POST", headers: request.headers, body: request.body, signal: options.signal, redirect: "error" });
         if (!response.ok) {
-          const error = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
-          const code = error?.error?.code?.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 100);
-          throw new Error(`Codex request failed with HTTP ${response.status}${code ? ` (${code})` : ""}`);
+          const body = await response.json().catch(() => null) as { error?: unknown } | null;
+          const details = errorDetailsOf(response.status, body?.error);
+          const label = details.type ?? details.code;
+          throw new CodexRequestError(`Codex request failed with HTTP ${response.status}${label ? ` (${label})` : ""}`, details);
         }
         if (!response.body) throw new Error("Codex response has no body");
         events = sse(response.body);
@@ -232,7 +243,7 @@ export class CodexClient implements CodexRuntime {
           }
         } else if (event.type === "response.failed" || event.type === "error") {
           const error = event.response?.error ?? event.error ?? event;
-          throw new Error(`Codex ${error.code ?? "response.failed"}: ${error.message ?? "request failed"}`);
+          throw new CodexRequestError(`Codex ${error.code ?? "response.failed"}: ${error.message ?? "request failed"}`, errorDetailsOf(undefined, error));
         } else if (event.type === "response.completed" || event.type === "response.incomplete") {
           const result = event.response ?? {};
           message.responseId = result.id ?? message.responseId;
@@ -257,6 +268,7 @@ export class CodexClient implements CodexRuntime {
     } catch (error) {
       message.stopReason = options.signal?.aborted ? "aborted" : "error";
       message.errorMessage = error instanceof Error ? error.message : String(error);
+      if (error instanceof CodexRequestError) message.errorDetails = error.details;
       yield { type: "error", reason: message.stopReason, error: message };
     }
   }

@@ -52,6 +52,22 @@ describe("Codex Rust protocol contract", () => {
     expect(responsesInput({ messages: [result.message] })).toContainEqual(signature);
     expect(result.message.content).toContainEqual({ type: "toolCall", id: "call_1", name: "read", arguments: { path: "a" } });
   });
+  it("carries the backend's error type and reset time through an HTTP failure", async () => {
+    const body = { error: { type: "usage_limit_reached", plan_type: "pro", resets_at: 1_760_000_000 } };
+    const client = new CodexClient({ ...config, fetchFn: async () => new Response(JSON.stringify(body), { status: 429 }) });
+    const result = await client.complete(model, context, { apiKey: "secret" });
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Codex request failed with HTTP 429 (usage_limit_reached)");
+    expect(result.errorDetails).toEqual({ status: 429, type: "usage_limit_reached", planType: "pro", resetsAt: 1_760_000_000 });
+
+    const throttled = new CodexClient({ ...config, fetchFn: async () => new Response(JSON.stringify({ error: { code: "rate_limit_exceeded" } }), { status: 429 }) });
+    const limited = await throttled.complete(model, context, { apiKey: "secret" });
+    expect(limited.errorMessage).toBe("Codex request failed with HTTP 429 (rate_limit_exceeded)");
+    expect(limited.errorDetails).toEqual({ status: 429, code: "rate_limit_exceeded" });
+
+    const opaque = new CodexClient({ ...config, fetchFn: async () => new Response("upstream error", { status: 502 }) });
+    expect((await opaque.complete(model, context, { apiKey: "secret" })).errorDetails).toEqual({ status: 502 });
+  });
   it("reports truncation and allowance errors without claiming completion", async () => {
     for (const events of [[], [{ type: "response.failed", response: { error: { code: "usage_limit_reached", message: "Allowance exhausted" } } }]]) {
       const client = new CodexClient({ ...config, fetchFn: async () => eventResponse(events) });

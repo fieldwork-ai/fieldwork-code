@@ -7,11 +7,18 @@ export interface Usage {
   input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number;
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 }
+/**
+ * What the Codex backend said about a failure, kept beside the message text.
+ * `type` is the discriminator the Codex CLI itself matches on (a 429 whose
+ * type is `usage_limit_reached` is an exhausted allowance; any other 429 is an
+ * ordinary rate limit), and `resetsAt` is the body's unix-seconds timestamp.
+ */
+export interface CodexErrorDetails { status?: number; code?: string; type?: string; planType?: string; resetsAt?: number }
 export interface AssistantMessage {
   role: "assistant"; content: (TextContent | ThinkingContent | ToolCall)[];
   api: string; provider: string; model: string; usage: Usage;
   stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
-  timestamp: number; responseId?: string; responseModel?: string; errorMessage?: string;
+  timestamp: number; responseId?: string; responseModel?: string; errorMessage?: string; errorDetails?: CodexErrorDetails;
 }
 export interface ToolResultMessage { role: "toolResult"; toolCallId: string; toolName: string; content: (TextContent | ImageContent)[]; isError: boolean; timestamp: number }
 export type Message = AssistantMessage | ToolResultMessage | { role: "user"; content: string | (TextContent | ImageContent)[]; timestamp: number };
