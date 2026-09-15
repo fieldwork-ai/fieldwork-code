@@ -237,7 +237,21 @@ describe("TUI through keystrokes, HTTP, SSE and an ANSI terminal emulator", () =
     await screen("Connection ended before the turn finished.");
     await screen("This partial reply must remain visible.");
     footer();
+    expect(backend.streamRequests).toEqual([]);
     await terminal.screenshot("11-interrupted");
+  });
+
+  it("follows a turn whose stream closed on a handoff, from the live stream, to its finish", async () => {
+    backend.replies.push({ text: "Started on one task, ", truncate: true, continues: { text: "and finished on another." } });
+    await submit("Simulate a deploy mid-turn");
+    await screen("and finished on another.");
+    await screen("Scripted model");
+    footer();
+    expect(backend.streamRequests).toEqual(["/api/conversations/tui-demo/stream?after=1"]);
+    const text = terminal.lines().join("\n");
+    expect(text).not.toContain("Connection ended");
+    expect(text.match(/Started on one task, /g)).toHaveLength(1);
+    await terminal.screenshot("15-handed-off");
   });
 });
 
