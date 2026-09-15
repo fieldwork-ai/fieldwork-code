@@ -1,3 +1,9 @@
+# 0.22.0
+
+Follow a turn whose stream closed before it finished. The cloud now moves a running turn between tasks at a step end during a deploy and closes the stream on the handoff, and a dropped connection has always ended a stream the same way. Where either used to surface "Connection ended before the turn finished", `fwcode` now reloads the transcript and, while the cloud says the turn is still running, attaches to the conversation's live stream (`GET /api/conversations/<id>/stream?after=<partial_revision>`) from the newest row the transcript holds, continuing the same assistant message in place. It goes around again if that stream ends the same way, backing off so a flapping network cannot spin, and reports an interruption only when the cloud says the turn is over and left its message partial.
+
+`consumeTurn` now returns `{ message, finished }` instead of throwing on a stream without a finish chunk.
+
 # 0.21.0
 
 Add a TypeScript-only Codex-style patch executor at `/apply-patch`, without capability negotiation or feature flags. Approval covers patch text; execution validates current files and applies without pre-approval staging or caches. Support multi-file add/update/delete/move, exact unambiguous context, BOM and line-ending preservation, exclusive destinations, bounded inputs, and explicit partial/uncertain failure reporting. Serialize patches with write/edit and render patch text in terminal approvals.

@@ -93,12 +93,25 @@ export class CodeSession {
       }
       accepted = true;
       let finalStatus: string | undefined;
-      await consumeTurn(response, { message: continuation, compact: body.command === "compact", onMessage: message => {
+      const consume = (stream: Response, message?: UIMessage) => consumeTurn(stream, { message, compact: body.command === "compact", onMessage: message => {
         this.partial = message;
         const exists = this.messages.some(item => item.id === message.id);
         this.messages = exists ? this.messages.map(item => item.id === message.id ? message : item) : [...this.messages, message];
         this.events.streaming(message);
       }, onStatus: status => { finalStatus = status; this.events.status(status); } });
+      let finished: boolean;
+      let lost: unknown;
+      try {
+        ({ finished } = await consume(response, continuation));
+      } catch (error) {
+        // The stream died mid-body. Whether the turn died with it is the
+        // cloud's to say, below.
+        if (this.controller.signal.aborted) throw error;
+        finished = false;
+        lost = error;
+      }
+      if (!finished) await this.follow(consume, lost);
+      if (this.controller.signal.aborted) { this.events.status("Stopped"); return; }
       await this.reload();
       this.events.status(body.command === "compact" && finalStatus ? finalStatus : this.pending.length ? "Approval needed" : this.conversation.model);
     } catch (error) {
@@ -112,6 +125,54 @@ export class CodeSession {
       this.log?.append("interruption", { message: this.partial });
       throw error;
     } finally { this.busy = false; this.controller = undefined; }
+  }
+  /**
+   * A stream closed before its turn finished. The turn very likely outlives
+   * it: the connection dropped, or the cloud moved the turn to another task
+   * during a deploy and closed this stream on the handoff. The transcript is
+   * the truth. While it says the turn is running, attach to the turn's live
+   * stream from the newest row the transcript holds, and go around again when
+   * that stream ends the same way; back off so a flapping network cannot
+   * spin. Once the cloud says the turn is over, a message it left partial is
+   * an interruption to report, and anything else is simply the turn.
+   */
+  private async follow(consume: (stream: Response, message?: UIMessage) => Promise<{ finished: boolean }>, lost: unknown) {
+    const signal = this.controller!.signal;
+    let failures = 0;
+    for (;;) {
+      signal.throwIfAborted();
+      try {
+        await this.reload();
+        failures = 0;
+      } catch (error) {
+        if (signal.aborted) throw error;
+        // Thirty straight failures to even ask is about a minute of nothing
+        // but errors (session expired, network down): stop rather than spin.
+        if (++failures >= 30) throw error;
+      }
+      if (!this.conversation.turn_active) {
+        const newest = this.messages.at(-1);
+        const partial = newest?.role === "assistant" && (newest.metadata as { partial?: boolean } | undefined)?.partial === true;
+        if (partial) throw new Error("Connection ended before the turn finished. Resume this conversation to recover its saved messages.");
+        if (lost) throw lost;
+        return;
+      }
+      await delay(Math.min(5000, 250 * 2 ** Math.min(failures, 4)) + Math.random() * 250, undefined, { signal });
+      this.events.status(lost ? "Reconnecting…" : "Working…");
+      const after = this.conversation.partial_revision;
+      const stream = await api(`${this.path}/stream${after != null ? `?after=${after}` : ""}`, { signal });
+      // 204 is a turn with nothing to read yet; 409 is a cursor a newer turn
+      // outran. Either way the next reload says what to attach to.
+      if (!stream.ok) continue;
+      const newest = this.messages.at(-1);
+      try {
+        if ((await consume(stream, newest?.role === "assistant" ? newest : undefined)).finished) return;
+        lost = undefined;
+      } catch (error) {
+        if (signal.aborted) throw error;
+        lost = error;
+      }
+    }
   }
   async send(text: string) {
     this.assertCanSend();

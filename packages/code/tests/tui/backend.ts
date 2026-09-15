@@ -7,12 +7,22 @@ export function deferred() {
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
-export type Reply = { reasoning?: string; text?: string; tool?: { name: string; input: unknown }; tools?: { name: string; input: unknown }[]; wait?: Promise<void>; fail?: string; pending?: UIMessage; truncate?: boolean };
+/**
+ * `truncate` closes the turn's stream without a finish. With `continues` the
+ * turn outlives the stream, as on a handoff: it stays active, and the
+ * conversation's live stream endpoint serves that reply and then the finish.
+ * Without it the connection took the turn with it, and its message is saved
+ * partial.
+ */
+export type Reply = { reasoning?: string; text?: string; tool?: { name: string; input: unknown }; tools?: { name: string; input: unknown }[]; wait?: Promise<void>; fail?: string; pending?: UIMessage; truncate?: boolean; continues?: Reply };
 
 export async function mockBackend(initialMessages: UIMessage[] = [], script?: (message: UIMessage) => Reply) {
   let messages = structuredClone(initialMessages);
   let counter = 0;
   let autoApprove = false;
+  let revision = 0;
+  let live: { id: string; message: UIMessage; reply: Reply } | undefined;
+  const streamRequests: string[] = [];
   const stops: unknown[] = [];
   const approvalSettings: boolean[] = [];
   const approvalFailures: string[] = [];
@@ -26,7 +36,29 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
     const json = (data: unknown, status = 200) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(data)); };
     if (req.url === "/api/conversations" || (req.url === "/api/conversations/tui-demo" && req.method === "GET")) {
-      json({ conversation_id: "tui-demo", model: "Scripted model", messages, auto_approve: autoApprove }); return;
+      json({ conversation_id: "tui-demo", model: "Scripted model", messages, auto_approve: autoApprove, turn_active: !!live, ...(live && { partial_revision: revision }) }); return;
+    }
+    if (req.url?.startsWith("/api/conversations/tui-demo/stream")) {
+      streamRequests.push(req.url);
+      if (!live) { res.writeHead(204); res.end(); return; }
+      const { id, message, reply } = live;
+      live = undefined;
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      active.add(res);
+      res.on("close", () => active.delete(res));
+      const emit = (chunk: unknown) => res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      emit({ type: "start", messageId: id });
+      if (reply.text) {
+        emit({ type: "text-start", id: "text-2" });
+        emit({ type: "text-delta", id: "text-2", delta: reply.text });
+        emit({ type: "text-end", id: "text-2" });
+        message.parts.push({ type: "text", text: reply.text });
+      }
+      messages = [...messages.filter(item => item.id !== id), structuredClone(message)];
+      emit({ type: "finish" });
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
     }
     if (req.url === "/api/conversations/tui-demo/auto-approve") {
       const error = approvalFailures.shift();
@@ -104,6 +136,13 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
         message.parts.push({ type: `tool-${tool.name}`, toolCallId, input: tool.input, state: "approval-requested", approval: { id: approvalId } });
       }
     }
+    if (reply.truncate && reply.continues) {
+      revision += 1;
+      live = { id, message, reply: reply.continues };
+      emit({ type: "data-handoff", data: { after: String(revision) }, transient: true });
+    } else if (reply.truncate) {
+      message.metadata = { partial: true };
+    }
     save();
     if (!reply.truncate) { emit({ type: "finish" }); res.write("data: [DONE]\n\n"); }
     res.end();
@@ -111,7 +150,7 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    replies, requests, approvalSettings, approvalFailures, approvalBehavior, stops,
+    replies, requests, streamRequests, approvalSettings, approvalFailures, approvalBehavior, stops,
     async close() { for (const stream of active) stream.end(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
   };
 }

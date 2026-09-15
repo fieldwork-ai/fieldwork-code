@@ -7,6 +7,8 @@ export interface Conversation {
   messages?: UIMessage[];
   next_cursor?: string | null;
   turn_active?: boolean;
+  /** While a turn runs: the newest row of it the transcript holds, the cursor its live stream continues from. */
+  partial_revision?: number | null;
 }
 export interface PendingApproval {
   id: string;

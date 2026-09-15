@@ -1,11 +1,17 @@
 import type { UIMessage, UIMessageChunk } from "ai";
 
+/**
+ * Read one turn's stream into a message. `finished` is false when the stream
+ * closed before the turn's finish chunk: the turn very likely outlives the
+ * stream (the connection dropped, or the cloud moved the turn to another task
+ * and closed this stream on the handoff), and the session decides what to do.
+ */
 export async function consumeTurn(response: Response, options: {
   message?: UIMessage;
   compact?: boolean;
   onMessage: (message: UIMessage) => void;
   onStatus: (status: string) => void;
-}): Promise<UIMessage | undefined> {
+}): Promise<{ message: UIMessage | undefined; finished: boolean }> {
   if (!response.body) throw new Error("The response has no stream");
   const { parseJsonEventStream, readUIMessageStream, uiMessageChunkSchema } = await import("ai");
   let finished = false;
@@ -36,6 +42,5 @@ export async function consumeTurn(response: Response, options: {
     options.onMessage(message);
   }
   const controlComplete = controlOnly && (options.compact ? compactFinished : allDenied && denied.size === 0);
-  if (!finished && !controlComplete) throw new Error("Connection ended before the turn finished. Resume this conversation to recover its saved messages.");
-  return last;
+  return { message: last, finished: finished || controlComplete };
 }
