@@ -143,7 +143,6 @@ export class CodeSession {
       signal.throwIfAborted();
       try {
         await this.reload();
-        failures = 0;
       } catch (error) {
         if (signal.aborted) throw error;
         // Thirty straight failures to even ask is about a minute of nothing
@@ -160,13 +159,24 @@ export class CodeSession {
       await delay(Math.min(5000, 250 * 2 ** Math.min(failures, 4)) + Math.random() * 250, undefined, { signal });
       this.events.status(lost ? "Reconnecting…" : "Working…");
       const after = this.conversation.partial_revision;
-      const stream = await api(`${this.path}/stream${after != null ? `?after=${after}` : ""}`, { signal });
+      let stream: Response;
+      try {
+        stream = await api(`${this.path}/stream${after != null ? `?after=${after}` : ""}`, { signal });
+      } catch (error) {
+        // The cloud could not be reached (the network is down, or flapping):
+        // the same backoff as a failed reload, and the same limit.
+        if (signal.aborted) throw error;
+        if (++failures >= 30) throw error;
+        continue;
+      }
       // 204 is a turn with nothing to read yet; 409 is a cursor a newer turn
       // outran. Either way the next reload says what to attach to.
       if (!stream.ok) continue;
       const newest = this.messages.at(-1);
       try {
         if ((await consume(stream, newest?.role === "assistant" ? newest : undefined)).finished) return;
+        // Attached and lost again: not a failure to reach the cloud.
+        failures = 0;
         lost = undefined;
       } catch (error) {
         if (signal.aborted) throw error;

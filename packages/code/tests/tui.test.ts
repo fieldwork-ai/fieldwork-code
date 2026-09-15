@@ -253,6 +253,17 @@ describe("TUI through keystrokes, HTTP, SSE and an ANSI terminal emulator", () =
     expect(text.match(/Started on one task, /g)).toHaveLength(1);
     await terminal.screenshot("15-handed-off");
   });
+
+  it("keeps following through a network that drops the reconnect, and still finishes", async () => {
+    backend.replies.push({ text: "Kept going ", truncate: true, continues: { text: "through a dropped dial." } });
+    backend.streamFaults.push(true);
+    await submit("Simulate a flapping network mid-turn");
+    await screen("through a dropped dial.");
+    await screen("Scripted model");
+    footer();
+    expect(backend.streamRequests).toEqual(["/api/conversations/tui-demo/stream?after=1", "/api/conversations/tui-demo/stream?after=1"]);
+    expect(terminal.lines().join("\n")).not.toContain("could not reach");
+  });
 });
 
 

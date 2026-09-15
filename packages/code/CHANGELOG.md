@@ -1,3 +1,7 @@
+# 0.23.0
+
+Keep following a turn through a network that drops the reconnect itself. A dial to the conversation's live stream that fails to reach the cloud now backs off and retries like a failed transcript reload, under the same limit (thirty straight failures), instead of ending the turn client-side with one error line. The backoff counter resets only once a stream has been attached, so a reachable transcript beside an unreachable stream cannot spin.
+
 # 0.22.0
 
 Follow a turn whose stream closed before it finished. The cloud now moves a running turn between tasks at a step end during a deploy and closes the stream on the handoff, and a dropped connection has always ended a stream the same way. Where either used to surface "Connection ended before the turn finished", `fwcode` now reloads the transcript and, while the cloud says the turn is still running, attaches to the conversation's live stream (`GET /api/conversations/<id>/stream?after=<partial_revision>`) from the newest row the transcript holds, continuing the same assistant message in place. It goes around again if that stream ends the same way, backing off so a flapping network cannot spin, and reports an interruption only when the cloud says the turn is over and left its message partial.

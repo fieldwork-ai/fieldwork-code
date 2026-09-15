@@ -23,6 +23,8 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
   let revision = 0;
   let live: { id: string; message: UIMessage; reply: Reply } | undefined;
   const streamRequests: string[] = [];
+  /** One entry per stream dial to drop at the socket before answering. */
+  const streamFaults: true[] = [];
   const stops: unknown[] = [];
   const approvalSettings: boolean[] = [];
   const approvalFailures: string[] = [];
@@ -40,6 +42,8 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
     }
     if (req.url?.startsWith("/api/conversations/tui-demo/stream")) {
       streamRequests.push(req.url);
+      // A network that drops the dial itself: no response, the socket closes.
+      if (streamFaults.length) { streamFaults.shift(); req.socket.destroy(); return; }
       if (!live) { res.writeHead(204); res.end(); return; }
       const { id, message, reply } = live;
       live = undefined;
@@ -150,7 +154,7 @@ export async function mockBackend(initialMessages: UIMessage[] = [], script?: (m
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    replies, requests, streamRequests, approvalSettings, approvalFailures, approvalBehavior, stops,
+    replies, requests, streamRequests, streamFaults, approvalSettings, approvalFailures, approvalBehavior, stops,
     async close() { for (const stream of active) stream.end(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
   };
 }
