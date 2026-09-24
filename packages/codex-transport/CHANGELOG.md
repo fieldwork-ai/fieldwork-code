@@ -1,3 +1,7 @@
+# 0.1.5
+
+Route `gpt-6-sol` and `gpt-6-luna` through the ChatGPT subscription. They succeed GPT-5.6 Sol and Luna, which stay listed for conversations still pinned to them.
+
 # 0.1.4
 
 Carry the Codex backend's error details (`status`, `code`, `type`, `plan_type`, `resets_at`) on failures as `AssistantMessage.errorDetails`, `CodexRequestError` and the AI SDK-facing `OpenAISubscriptionError`. An exhausted ChatGPT allowance (HTTP 429 with type `usage_limit_reached`) was previously flattened to `Codex request failed with HTTP 429`, indistinguishable from an ordinary rate limit; `isOpenAISubscriptionUsageLimitError` now reads the type, and the new `openAISubscriptionUsageLimit` returns it with the reset time.
