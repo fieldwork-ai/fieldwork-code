@@ -162,6 +162,16 @@ export class CodexClient implements CodexRuntime {
       const argumentsText = new Map<string, string>();
       const textKeys = new Map<string, number>();
       const ended = new Set<number>();
+      const summaryTexts = new Map<number, Map<number, string>>();
+      function* emitSummary(index: number, text: string): Generator<AssistantMessageEvent> {
+        const part = message.content[index];
+        // Streams are append-only: reconcile a completed prefix, never repeat or rewrite it.
+        if (part.type !== "thinking" || ended.has(index) || !text.startsWith(part.thinking)) return;
+        const delta = text.slice(part.thinking.length);
+        if (!delta) return;
+        part.thinking = text;
+        yield { type: "thinking_delta", contentIndex: index, delta, partial: message };
+      }
       for await (const event of events) {
         if (event.type === "response.created" || event.type === "response.in_progress") {
           message.responseId = event.response?.id; message.responseModel = event.response?.model ?? model.id;
@@ -188,12 +198,19 @@ export class CodexClient implements CodexRuntime {
           const part = message.content[index];
           if (part.type === "text") part.text += event.delta ?? "";
           yield { type: "text_delta", contentIndex: index, delta: event.delta ?? "", partial: message };
-        } else if (event.type === "response.reasoning_summary_text.delta") {
+        } else if (event.type === "response.reasoning_summary_text.delta" || event.type === "response.reasoning_summary_text.done" || event.type === "response.reasoning_summary_part.done") {
           const index = itemIndexes.get(event.item_id);
-          if (index === undefined) continue;
-          const part = message.content[index];
-          if (part.type === "thinking") part.thinking += event.delta ?? "";
-          yield { type: "thinking_delta", contentIndex: index, delta: event.delta ?? "", partial: message };
+          if (index === undefined || ended.has(index)) continue;
+          const summaries = summaryTexts.get(index) ?? new Map<number, string>();
+          summaryTexts.set(index, summaries);
+          const summaryIndex = event.summary_index ?? 0;
+          const previous = summaries.get(summaryIndex) ?? "";
+          const text = event.type === "response.reasoning_summary_text.delta"
+            ? previous + (event.delta ?? "")
+            : event.type === "response.reasoning_summary_text.done" ? event.text : event.part?.text;
+          if (typeof text !== "string" || !text.startsWith(previous)) continue;
+          summaries.set(summaryIndex, text);
+          yield* emitSummary(index, [...summaries].sort(([a], [b]) => a - b).map(([, text]) => text).join("\n"));
         } else if (event.type === "response.function_call_arguments.delta") {
           const index = itemIndexes.get(event.item_id);
           if (index === undefined) continue;
@@ -227,18 +244,17 @@ export class CodexClient implements CodexRuntime {
               yield { type: "toolcall_delta", contentIndex: index, delta: item.arguments ?? "{}", partial: message };
             }
           }
-          if (index === undefined) continue;
-          const part = message.content[index]; ended.add(index);
+          if (index === undefined || ended.has(index)) continue;
+          const part = message.content[index];
           if (part.type === "thinking") {
-            if (!part.thinking) {
-              part.thinking = (item.summary ?? []).map((summary: { text?: string }) => summary.text ?? "").join("\n");
-              if (part.thinking) yield { type: "thinking_delta", contentIndex: index, delta: part.thinking, partial: message };
-            }
+            yield* emitSummary(index, (item.summary ?? []).map((summary: { text?: string }) => summary.text ?? "").join("\n"));
+            ended.add(index);
             part.thinkingSignature = JSON.stringify(item);
             yield { type: "thinking_end", contentIndex: index, content: part.thinking, partial: message };
           } else if (part.type === "toolCall") {
             const text = item.arguments ?? argumentsText.get(item.id) ?? "{}";
             part.arguments = JSON.parse(text);
+            ended.add(index);
             yield { type: "toolcall_end", contentIndex: index, toolCall: part, partial: message };
           }
         } else if (event.type === "response.failed" || event.type === "error") {
