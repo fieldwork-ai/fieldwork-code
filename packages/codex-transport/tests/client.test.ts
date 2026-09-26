@@ -5,11 +5,65 @@ import { WebSocketServer } from "ws";
 import { buildCodexRequest, CodexClient, normalizeCodexBaseUrl, responsesInput } from "../src/client.js";
 import { beginOpenAIBrowserAuthorization, exchangeOpenAIBrowserAuthorization } from "../src/oauth.js";
 import type { Model } from "../src/client-types.js";
+import { createOpenAISubscriptionModel } from "../src/language-model.js";
 const config = { attribution: { originator: "test-client", userAgent: "test-client/1" }, accountId: "account-test" };
 const model: Model = { id: "gpt-5.6-luna", name: "test", api: "openai-chatgpt-responses", provider: "openai", baseUrl: "https://chatgpt.com", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 400000, maxTokens: 128000 };
 const context = { systemPrompt: "Be helpful", messages: [{ role: "user" as const, content: "Hello", timestamp: 1 }] };
 const completion = { type: "response.completed", response: { id: "resp-test", usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 80 }, output_tokens: 5 } } };
 function eventResponse(events: unknown[]) { return new Response(events.map(event => `data: ${JSON.stringify(event)}\r\n\r\n`).join("")); }
+describe("completed reasoning summaries", () => {
+  const heading = "**Checking the implementation**";
+  const full = `${heading}\n\nThe summary body is preserved.`;
+  const added = { type: "response.output_item.added", item: { id: "rs_1", type: "reasoning" } };
+  const delta = (text: string, summary_index = 0) => ({ type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index, delta: text });
+  const textDone = (text: string, summary_index = 0) => ({ type: "response.reasoning_summary_text.done", item_id: "rs_1", summary_index, text });
+  const partDone = (text: string, summary_index = 0) => ({ type: "response.reasoning_summary_part.done", item_id: "rs_1", summary_index, part: { type: "summary_text", text } });
+  const itemDone = (...texts: string[]) => ({ type: "response.output_item.done", item: { id: "rs_1", type: "reasoning", encrypted_content: "opaque", summary: texts.map(text => ({ type: "summary_text", text })) } });
+
+  it.each([
+    { name: "partial delta then full output item", events: [added, delta(heading), itemDone(full)], expected: full },
+    { name: "partial delta then text completion", events: [added, delta(heading), textDone(full)], expected: full },
+    { name: "partial delta then part completion", events: [added, delta(heading), partDone(full)], expected: full },
+    { name: "repeated completion events", events: [added, delta(heading), textDone(full), textDone(full), partDone(full), itemDone(full)], expected: full },
+    { name: "fully streamed summary", events: [added, delta(heading), delta(full.slice(heading.length)), textDone(full), partDone(full), itemDone(full)], expected: full },
+    { name: "completed item without deltas", events: [itemDone(full)], expected: full },
+    { name: "completed text without deltas", events: [added, textDone(full), itemDone(full)], expected: full },
+    { name: "multiple indexed summaries", events: [added, delta(heading), textDone(full), delta("Next", 1), textDone("Next section.", 1), partDone("Next section.", 1), itemDone(full, "Next section.")], expected: `${full}\nNext section.` },
+    { name: "final item supplies remaining summaries", events: [added, delta(full), itemDone(full, "Next section.")], expected: `${full}\nNext section.` },
+    { name: "empty final summary retains streamed content", events: [added, delta(full), itemDone()], expected: full },
+    { name: "conflicting final text does not duplicate or rewrite the stream", events: [added, delta(full), textDone("Different summary"), itemDone("Different summary")], expected: full },
+  ])("preserves live and final text: $name", async ({ events, expected }) => {
+    const fetchFn = async () => eventResponse([...events, completion]);
+    const client = new CodexClient({ ...config, fetchFn });
+    let streamed = "";
+    let ended = "";
+    for await (const event of client.stream(model, context, { apiKey: "secret" })) {
+      if (event.type === "thinking_delta") streamed += event.delta;
+      if (event.type === "thinking_end") ended = event.content;
+      if (event.type === "error") throw new Error(event.error.errorMessage);
+      if (event.type === "done") {
+        expect(event.message.content).toContainEqual(expect.objectContaining({ type: "thinking", thinking: expected }));
+        const finalItem = events.findLast(event => event.type === "response.output_item.done");
+        if (finalItem && "item" in finalItem) expect(responsesInput({ messages: [event.message] })).toContainEqual(finalItem.item);
+      }
+    }
+    expect(streamed).toBe(expected);
+    expect(ended).toBe(expected);
+
+    const sdk = createOpenAISubscriptionModel({ ...config, fetchFn, accessToken: "secret", modelId: model.id });
+    const { stream } = await sdk.doStream({ prompt: [{ role: "user", content: [{ type: "text", text: "Hello" }] }] });
+    const reader = stream.getReader();
+    let sdkText = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value.type === "error") throw value.error;
+      if (value.type === "reasoning-delta") sdkText += value.delta;
+    }
+    expect(sdkText).toBe(expected);
+  });
+});
+
 describe("Codex Rust protocol contract", () => {
   it("normalizes backend URLs and emits canonical attribution, routing, session and compression headers", () => {
     const request = buildCodexRequest(model, context, { apiKey: "secret", sessionId: "session", threadId: "thread", serviceTier: "priority" }, { ...config, fedramp: true });
