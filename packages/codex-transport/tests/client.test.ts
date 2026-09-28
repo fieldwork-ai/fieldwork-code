@@ -28,8 +28,8 @@ describe("completed reasoning summaries", () => {
     { name: "fully streamed summary", events: [added, delta(heading), delta(full.slice(heading.length)), textDone(full), partDone(full), itemDone(full)], expected: full },
     { name: "completed item without deltas", events: [itemDone(full)], expected: full },
     { name: "completed text without deltas", events: [added, textDone(full), itemDone(full)], expected: full },
-    { name: "multiple indexed summaries", events: [added, delta(heading), textDone(full), delta("Next", 1), textDone("Next section.", 1), partDone("Next section.", 1), itemDone(full, "Next section.")], expected: `${full}\nNext section.` },
-    { name: "final item supplies remaining summaries", events: [added, delta(full), itemDone(full, "Next section.")], expected: `${full}\nNext section.` },
+    { name: "multiple indexed summaries", events: [added, delta(heading), textDone(full), delta("Next", 1), textDone("Next section.", 1), partDone("Next section.", 1), itemDone(full, "Next section.")], expected: `${full}\n\nNext section.` },
+    { name: "final item supplies remaining summaries", events: [added, delta(full), itemDone(full, "Next section.")], expected: `${full}\n\nNext section.` },
     { name: "empty final summary retains streamed content", events: [added, delta(full), itemDone()], expected: full },
     { name: "conflicting final text does not duplicate or rewrite the stream", events: [added, delta(full), textDone("Different summary"), itemDone("Different summary")], expected: full },
   ])("preserves live and final text: $name", async ({ events, expected }) => {
@@ -105,6 +105,24 @@ describe("Codex Rust protocol contract", () => {
     expect(result.message.stopReason).toBe("toolUse");
     expect(responsesInput({ messages: [result.message] })).toContainEqual(signature);
     expect(result.message.content).toContainEqual({ type: "toolCall", id: "call_1", name: "read", arguments: { path: "a" } });
+  });
+  it("separates reasoning summary sections into paragraphs, streamed or not", async () => {
+    const sections = [{ type: "summary_text", text: "**Plan**\n\nRead it." }, { type: "summary_text", text: "**Check**\n\nDone." }];
+    const streamed = new CodexClient({ ...config, fetchFn: async () => eventResponse([
+      { type: "response.output_item.added", item: { id: "rs_1", type: "reasoning" } },
+      { type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index: 0, delta: "**Plan**\n\nRead" },
+      { type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index: 0, delta: " it." },
+      { type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index: 1, delta: "**Check**\n\nDone." },
+      { type: "response.output_item.done", item: { id: "rs_1", type: "reasoning", summary: sections } }, completion,
+    ]) });
+    const deltas: string[] = [];
+    for await (const event of streamed.stream(model, context, { apiKey: "secret" })) if (event.type === "thinking_delta") deltas.push(event.delta);
+    expect(deltas.join("")).toBe("**Plan**\n\nRead it.\n\n**Check**\n\nDone.");
+    const unstreamed = new CodexClient({ ...config, fetchFn: async () => eventResponse([
+      { type: "response.output_item.done", item: { id: "rs_1", type: "reasoning", summary: sections } }, completion,
+    ]) });
+    const result = await unstreamed.complete(model, context, { apiKey: "secret" });
+    expect(result.content).toContainEqual(expect.objectContaining({ type: "thinking", thinking: "**Plan**\n\nRead it.\n\n**Check**\n\nDone." }));
   });
   it("carries the backend's error type and reset time through an HTTP failure", async () => {
     const body = { error: { type: "usage_limit_reached", plan_type: "pro", resets_at: 1_760_000_000 } };

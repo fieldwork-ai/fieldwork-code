@@ -6,6 +6,9 @@ import type { AssistantMessage, AssistantMessageEvent, CodexClientOptions, Codex
 export class CodexRequestError extends Error {
   constructor(message: string, readonly details: CodexErrorDetails) { super(message); this.name = "CodexRequestError"; }
 }
+// A reasoning summary streams as numbered sections (`summary_index`) with no separator of their own;
+// a single newline would still render them as one markdown paragraph.
+const SUMMARY_SEPARATOR = "\n\n";
 const token = (value: unknown): string | undefined => typeof value === "string" ? value.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 100) || undefined : undefined;
 function errorDetailsOf(status: number | undefined, error: unknown): CodexErrorDetails {
   const body = (error && typeof error === "object" ? error : {}) as { code?: unknown; type?: unknown; plan_type?: unknown; resets_at?: unknown };
@@ -210,7 +213,7 @@ export class CodexClient implements CodexRuntime {
             : event.type === "response.reasoning_summary_text.done" ? event.text : event.part?.text;
           if (typeof text !== "string" || !text.startsWith(previous)) continue;
           summaries.set(summaryIndex, text);
-          yield* emitSummary(index, [...summaries].sort(([a], [b]) => a - b).map(([, text]) => text).join("\n"));
+          yield* emitSummary(index, [...summaries].sort(([a], [b]) => a - b).map(([, text]) => text).join(SUMMARY_SEPARATOR));
         } else if (event.type === "response.function_call_arguments.delta") {
           const index = itemIndexes.get(event.item_id);
           if (index === undefined) continue;
@@ -247,7 +250,7 @@ export class CodexClient implements CodexRuntime {
           if (index === undefined || ended.has(index)) continue;
           const part = message.content[index];
           if (part.type === "thinking") {
-            yield* emitSummary(index, (item.summary ?? []).map((summary: { text?: string }) => summary.text ?? "").join("\n"));
+            yield* emitSummary(index, (item.summary ?? []).map((summary: { text?: string }) => summary.text ?? "").join(SUMMARY_SEPARATOR));
             ended.add(index);
             part.thinkingSignature = JSON.stringify(item);
             yield { type: "thinking_end", contentIndex: index, content: part.thinking, partial: message };
