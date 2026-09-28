@@ -6,6 +6,9 @@ import type { AssistantMessage, AssistantMessageEvent, CodexClientOptions, Codex
 export class CodexRequestError extends Error {
   constructor(message: string, readonly details: CodexErrorDetails) { super(message); this.name = "CodexRequestError"; }
 }
+// A reasoning summary streams as numbered sections (`summary_index`) with no separator of their own;
+// a single newline would still render them as one markdown paragraph.
+const SUMMARY_SEPARATOR = "\n\n";
 const token = (value: unknown): string | undefined => typeof value === "string" ? value.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 100) || undefined : undefined;
 function errorDetailsOf(status: number | undefined, error: unknown): CodexErrorDetails {
   const body = (error && typeof error === "object" ? error : {}) as { code?: unknown; type?: unknown; plan_type?: unknown; resets_at?: unknown };
@@ -161,6 +164,7 @@ export class CodexClient implements CodexRuntime {
       const itemIndexes = new Map<string, number>();
       const argumentsText = new Map<string, string>();
       const textKeys = new Map<string, number>();
+      const summaryIndexes = new Map<string, number>();
       const ended = new Set<number>();
       for await (const event of events) {
         if (event.type === "response.created" || event.type === "response.in_progress") {
@@ -192,8 +196,12 @@ export class CodexClient implements CodexRuntime {
           const index = itemIndexes.get(event.item_id);
           if (index === undefined) continue;
           const part = message.content[index];
-          if (part.type === "thinking") part.thinking += event.delta ?? "";
-          yield { type: "thinking_delta", contentIndex: index, delta: event.delta ?? "", partial: message };
+          const summaryIndex = event.summary_index ?? 0;
+          const opensSection = part.type === "thinking" && part.thinking !== "" && summaryIndexes.get(event.item_id) !== summaryIndex;
+          summaryIndexes.set(event.item_id, summaryIndex);
+          const delta = `${opensSection ? SUMMARY_SEPARATOR : ""}${event.delta ?? ""}`;
+          if (part.type === "thinking") part.thinking += delta;
+          yield { type: "thinking_delta", contentIndex: index, delta, partial: message };
         } else if (event.type === "response.function_call_arguments.delta") {
           const index = itemIndexes.get(event.item_id);
           if (index === undefined) continue;
@@ -231,7 +239,7 @@ export class CodexClient implements CodexRuntime {
           const part = message.content[index]; ended.add(index);
           if (part.type === "thinking") {
             if (!part.thinking) {
-              part.thinking = (item.summary ?? []).map((summary: { text?: string }) => summary.text ?? "").join("\n");
+              part.thinking = (item.summary ?? []).map((summary: { text?: string }) => summary.text ?? "").join(SUMMARY_SEPARATOR);
               if (part.thinking) yield { type: "thinking_delta", contentIndex: index, delta: part.thinking, partial: message };
             }
             part.thinkingSignature = JSON.stringify(item);

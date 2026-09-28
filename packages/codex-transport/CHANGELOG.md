@@ -1,3 +1,7 @@
+# 0.1.6
+
+Separate reasoning summary sections with a blank line. The Responses API streams a summary as numbered sections (`summary_index`) that carry no separator of their own, so every section after the first ran onto the end of the one before it, and the fallback for an unstreamed summary joined sections with a single newline, which markdown also renders as one paragraph.
+
 # 0.1.5
 
 Route `gpt-6-sol` and `gpt-6-luna` through the ChatGPT subscription. They succeed GPT-5.6 Sol and Luna, which stay listed for conversations still pinned to them.
