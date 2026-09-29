@@ -1,3 +1,7 @@
+# 0.1.8
+
+Route `gpt-6.1-sol` through the ChatGPT subscription. It succeeds GPT-6 Sol, which stays listed for conversations still pinned to it.
+
 # 0.1.7
 
 Keep the whole reasoning summary when a completion event carries more than the stream did. Once a partial delta (such as a section heading) had arrived, the fuller text in `response.reasoning_summary_text.done`, `response.reasoning_summary_part.done` or the completed output item was ignored, so the summary stopped at the heading. Completed text now extends the streamed prefix by exactly its missing suffix; text that does not extend it is ignored rather than duplicated or rewritten.
