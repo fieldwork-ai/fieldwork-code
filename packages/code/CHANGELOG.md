@@ -1,3 +1,9 @@
+# 0.24.0
+
+Give up on an execution stream that goes quiet, and connect again. A connection can die without either end seeing it: the server's writes into it still succeed, and the client's socket can take many minutes to report the failure. Desktop runners stayed offline for as long as that took, and kept getting jobs they never saw. The device stream (`/api/runners/events`) and each conversation's executor stream now abort after 20 seconds without a byte (`STREAM_IDLE_MS`; the server writes a heartbeat every 5). The deadline covers fetching the token, waiting for the response headers and every gap between chunks. A conversation stream started with `reconnect: false` still comes back from a stream it gave up on itself, retrying until the server answers it, because the server cannot tell that the stream died and keeps the session for it. A stream the server ends or refuses still ends such a runner as before. `ConnectionOptions.streamIdleMs` overrides the deadline.
+
+Needs a server that hands a device or session to its newest connection rather than refusing it while an older connection holds it.
+
 # 0.23.0
 
 Keep following a turn through a network that drops the reconnect itself. A dial to the conversation's live stream that fails to reach the cloud now backs off and retries like a failed transcript reload, under the same limit (thirty straight failures), instead of ending the turn client-side with one error line. The backoff counter resets only once a stream has been attached, so a reachable transcript beside an unreachable stream cannot spin.
