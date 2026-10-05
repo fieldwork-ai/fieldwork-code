@@ -4,46 +4,74 @@ import { runnerRoots, runnerSignal, resolveRoot } from "./tools/workspace.js";
 import { interruptForeground, reapBackground } from "./tools/bash.js";
 import { runnerShell, ShellSessionManager, PERSISTENT_SHELL_CAPABILITY } from "./tools/shell-session.js";
 
-export interface ConnectionOptions { apiUrl: string; getToken: () => Promise<string>; onStatus?: (online: boolean) => void }
+export interface ConnectionOptions { apiUrl: string; getToken: () => Promise<string>; onStatus?: (online: boolean) => void; streamIdleMs?: number }
 export interface RunnerOptions extends ConnectionOptions { sessionId: string; roots: string[]; reconnect?: boolean; onClose?: () => void; shellManager?: ShellSessionManager }
+/**
+ * The server writes a heartbeat every 5 seconds. A connection can die without
+ * either end seeing it, and the socket may take many minutes to say so, so a
+ * stream that has gone this long without a byte is treated as dead.
+ */
+export const STREAM_IDLE_MS = 20_000;
+class StreamStalled extends Error { constructor() { super("Execution stream went quiet"); } }
+class HttpError extends Error { constructor(readonly status: number) { super(`Executor request failed (${status})`); } }
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
 async function request(options: ConnectionOptions, path: string, signal: AbortSignal, init: RequestInit = {}) {
-  const response = await fetch(`${options.apiUrl.replace(/\/$/, "")}${path}`, { ...init, signal, headers: { ...init.headers, Authorization: `Bearer ${await options.getToken()}` } });
-  if (!response.ok) throw new Error(`Executor request failed (${response.status})`);
+  const token = await untilAborted(options.getToken(), signal);
+  const response = await fetch(`${options.apiUrl.replace(/\/$/, "")}${path}`, { ...init, signal, headers: { ...init.headers, Authorization: `Bearer ${token}` } });
+  if (!response.ok) throw new HttpError(response.status);
   return response;
 }
-async function events(response: Response, onEvent: (event: Record<string, unknown>) => void) {
-  if (!response.headers.get("content-type")?.startsWith("text/event-stream") || !response.body) throw new Error("Expected an execution stream");
-  const reader = response.body.getReader(), decoder = new TextDecoder();
-  let buffer = "";
+/** Opens an event stream and reads it to its end, aborting it once it goes quiet (`streamIdleMs`). */
+async function events(options: ConnectionOptions, path: string, signal: AbortSignal, init: RequestInit, onEvent: (event: Record<string, unknown>) => void) {
+  const quiet = new AbortController(), connection = AbortSignal.any([signal, quiet.signal]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => { clearTimeout(timer); timer = setTimeout(() => quiet.abort(new StreamStalled()), options.streamIdleMs ?? STREAM_IDLE_MS); };
+  arm();
   try {
-    while (true) {
-      const chunk = await reader.read(); if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      let end: number;
-      while ((end = buffer.indexOf("\n\n")) >= 0) {
-        const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
-        if (frame.length > 16_384) throw new Error("Execution event exceeds limit");
-        const data = frame.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
-        if (data) onEvent(JSON.parse(data));
+    const response = await request(options, path, connection, init);
+    if (!response.headers.get("content-type")?.startsWith("text/event-stream") || !response.body) throw new Error("Expected an execution stream");
+    const reader = response.body.getReader(), decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      while (true) {
+        const chunk = await reader.read(); if (chunk.done) break;
+        arm();
+        buffer += decoder.decode(chunk.value, { stream: true });
+        let end: number;
+        while ((end = buffer.indexOf("\n\n")) >= 0) {
+          const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+          if (frame.length > 16_384) throw new Error("Execution event exceeds limit");
+          const data = frame.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
+          if (data) onEvent(JSON.parse(data));
+        }
+        if (buffer.length > 16_384) throw new Error("Execution event exceeds limit");
       }
-      if (buffer.length > 16_384) throw new Error("Execution event exceeds limit");
-    }
-  } finally { await reader.cancel().catch(() => {}); }
+    } finally { await reader.cancel().catch(() => {}); }
+  } catch (error) {
+    throw quiet.signal.aborted && !signal.aborted ? quiet.signal.reason : error;
+  } finally { clearTimeout(timer); quiet.abort(); }
 }
 export function startRunner(options: RunnerOptions): { stop: () => void } {
   const lifetime = new AbortController(), seen = new Set<string>();
   let active: AbortController | undefined;
   const prefix = `/api/runner-sessions/${encodeURIComponent(options.sessionId)}`;
   async function connect() {
-    let attempts = 0;
+    let attempts = 0, recovering = false;
     do {
       const connection = new AbortController(); active = connection;
       const signal = AbortSignal.any([connection.signal, lifetime.signal]);
       const calls = new Map<string, AbortController>();
-      let connectionId: string | undefined;
+      let connectionId: string | undefined, failure: unknown;
       try {
-        await events(await request(options, `${prefix}/events`, signal), frame => {
-          if (frame.type === "ready" && typeof frame.connection_id === "string") { connectionId = frame.connection_id; attempts = 0; options.onStatus?.(true); return; }
+        await events(options, `${prefix}/events`, signal, {}, frame => {
+          if (frame.type === "ready" && typeof frame.connection_id === "string") { connectionId = frame.connection_id; attempts = 0; recovering = false; options.onStatus?.(true); return; }
           if (frame.type === "heartbeat") return;
           if (frame.type === "cancel" && typeof frame.id === "string") { calls.get(frame.id)?.abort(); return; }
           if (frame.type !== "request" || typeof frame.id !== "string" || typeof frame.path !== "string" || !connectionId || !routes[`POST ${frame.path}`]) throw new Error("Invalid execution request");
@@ -71,12 +99,18 @@ export function startRunner(options: RunnerOptions): { stop: () => void } {
             await request(options, path, callSignal, { method: "POST", headers, body: JSON.stringify(result) });
           })().catch(() => { if (!callSignal.aborted) connection.abort(); }).finally(() => calls.delete(id));
         });
-      } catch {} finally {
+      } catch (error) { failure = error; } finally {
         connection.abort(); options.onStatus?.(false);
         options.shellManager?.interrupt(options.sessionId);
         for (const root of options.roots) interruptForeground(root);
       }
-      if (options.reconnect === false || lifetime.signal.aborted) break;
+      if (lifetime.signal.aborted) break;
+      // A runner that does not reconnect still comes back from a stream it gave
+      // up on itself, since the server cannot know that one died and holds the
+      // session for it. It retries until the server answers: a new stream, or a refusal.
+      if (failure instanceof StreamStalled) recovering = true;
+      else if (failure instanceof HttpError) recovering = false;
+      if (options.reconnect === false && !recovering) break;
       await delay(Math.min(30_000, 1000 * 2 ** attempts++), undefined, { signal: lifetime.signal }).catch(() => {});
     } while (!lifetime.signal.aborted);
     for (const root of options.roots) reapBackground(root);
@@ -100,7 +134,7 @@ export function startDeviceRunner(options: DeviceRunnerOptions): { stop: () => v
     let attempts = 0;
     while (!lifetime.signal.aborted) {
       try {
-        await events(await request(options, "/api/runners/events", lifetime.signal, { headers: { "X-Runner-Capabilities": capabilities.join(",") } }), frame => {
+        await events(options, "/api/runners/events", lifetime.signal, { headers: { "X-Runner-Capabilities": capabilities.join(",") } }, frame => {
           if (frame.type === "ready") { attempts = 0; options.onStatus?.(true); return; }
           if (frame.type === "heartbeat") return;
           if (frame.type === "control" && typeof frame.id === "string" && options.onControl) {
