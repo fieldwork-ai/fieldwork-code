@@ -1,4 +1,5 @@
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from "node:crypto";
+import { sanitizeErrorText } from "./sanitize.js";
 
 /** OAuth device and browser flows following openai/codex codex-rs/login. */
 
@@ -86,16 +87,6 @@ function parseObject(text: string): Record<string, unknown> | null {
   }
 }
 
-function sanitizeErrorText(value: string): string {
-  return value
-    .replace(/\x1b\[[\u0020-\u003f]*[\u0040-\u007e]/g, "")
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-    .replace(/\b(?:Bearer\s+)?eyJ[A-Za-z0-9._-]+\b/gi, "[REDACTED]")
-    .replace(/\b(?:access|refresh|id)_token\s*[=:]\s*[^\s,;}]+/gi, "token=[REDACTED]")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 1_000);
-}
 
 function errorMessage(prefix: string, status: number, bodyText: string): string {
   const body = parseObject(bodyText);
@@ -537,9 +528,37 @@ export async function refreshOpenAISubscriptionCredential(
     signal: options.signal,
   });
   if (!result.ok) {
-    throw new Error(`OpenAI subscription token refresh failed: HTTP ${result.status}`);
+    const code = nonEmpty(parseObject(result.body)?.error);
+    throw new OpenAISubscriptionRefreshError(
+      `OpenAI subscription token refresh failed: HTTP ${result.status}${code ? ` (${sanitizeErrorText(code)})` : ""}`,
+      result.status,
+    );
   }
   return credentialFromTokenResponse(result.body, credential.refreshToken, credential.accountId);
+}
+
+/** The token endpoint answered a refresh with an error status. */
+export class OpenAISubscriptionRefreshError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "OpenAISubscriptionRefreshError";
+  }
+}
+
+/**
+ * Whether a refresh failure means the login is gone and only signing in again
+ * restores it. Any client error but a timeout or a rate limit: those say
+ * nothing about the refresh token, and treating one as a revocation would
+ * disconnect a working login. Network failures and 5xx are likewise transient.
+ */
+export function isOpenAISubscriptionRefreshRejected(error: unknown): boolean {
+  return (
+    error instanceof OpenAISubscriptionRefreshError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429
+  );
 }
 
 export interface VersionedOpenAISubscriptionCredential {

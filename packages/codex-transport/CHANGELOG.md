@@ -1,3 +1,11 @@
+# 0.1.9
+
+Renew a refused access token once and send the request again. ChatGPT can revoke an access token long before it expires, and every request then failed with HTTP 401 until the token's expiry finally prompted a refresh, days later. `createOpenAISubscriptionModel` takes an optional `renewAccessToken(rejected)`: on a 401 that arrives before the response starts, it asks for a new token, retries once, and keeps the new token for later calls on the model. A renewal that throws fails the call with its own error.
+
+Keep the backend's own explanation of a failure. The ChatGPT backend refuses some requests with `{"detail": "..."}` and no type or code, which left only `Codex request failed with HTTP 400`. The explanation, sanitized of control sequences and token-shaped values and bounded, now follows the status in the message and is `CodexErrorDetails.message`.
+
+A rejected refresh throws `OpenAISubscriptionRefreshError`, carrying the token endpoint's status and its OAuth error code in the message, and `isOpenAISubscriptionRefreshRejected` says whether it means the login is gone: any 4xx but 408 and 429. A failed usage request throws `CodexRequestError` with its status.
+
 # 0.1.8
 
 Route `gpt-6.1-sol` through the ChatGPT subscription. It succeeds GPT-6 Sol, which stays listed for conversations still pinned to it.
