@@ -140,6 +140,22 @@ describe("Codex Rust protocol contract", () => {
     const opaque = new CodexClient({ ...config, fetchFn: async () => new Response("upstream error", { status: 502 }) });
     expect((await opaque.complete(model, context, { apiKey: "secret" })).errorDetails).toEqual({ status: 502 });
   });
+  it("keeps the backend's own explanation of an HTTP failure, sanitized", async () => {
+    // The ChatGPT backend's shape for a model the account's plan does not include: no type, no code.
+    const detail = "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.";
+    const refused = new CodexClient({ ...config, fetchFn: async () => new Response(JSON.stringify({ detail }), { status: 400 }) });
+    const result = await refused.complete(model, context, { apiKey: "secret" });
+    expect(result.errorMessage).toBe(`Codex request failed with HTTP 400: ${detail}`);
+    expect(result.errorDetails).toEqual({ status: 400, message: detail });
+
+    const typed = new CodexClient({ ...config, fetchFn: async () => new Response(JSON.stringify({ error: { type: "invalid_request_error", message: "Your authentication token has been invalidated." } }), { status: 401 }) });
+    expect((await typed.complete(model, context, { apiKey: "secret" })).errorMessage).toBe("Codex request failed with HTTP 401 (invalid_request_error): Your authentication token has been invalidated.");
+
+    const leaky = new CodexClient({ ...config, fetchFn: async () => new Response(JSON.stringify({ detail: "bad token Bearer eyJhbGciOi.payload.sig\u001b[31m" }), { status: 401 }) });
+    const leaked = await leaky.complete(model, context, { apiKey: "secret" });
+    expect(leaked.errorMessage).toBe("Codex request failed with HTTP 401: bad token [REDACTED]");
+    expect(leaked.errorMessage).not.toContain("eyJ");
+  });
   it("reports truncation and allowance errors without claiming completion", async () => {
     for (const events of [[], [{ type: "response.failed", response: { error: { code: "usage_limit_reached", message: "Allowance exhausted" } } }]]) {
       const client = new CodexClient({ ...config, fetchFn: async () => eventResponse(events) });

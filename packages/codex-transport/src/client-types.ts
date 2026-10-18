@@ -11,9 +11,10 @@ export interface Usage {
  * What the Codex backend said about a failure, kept beside the message text.
  * `type` is the discriminator the Codex CLI itself matches on (a 429 whose
  * type is `usage_limit_reached` is an exhausted allowance; any other 429 is an
- * ordinary rate limit), and `resetsAt` is the body's unix-seconds timestamp.
+ * ordinary rate limit), `resetsAt` is the body's unix-seconds timestamp, and
+ * `message` is the backend's own explanation, sanitized and bounded.
  */
-export interface CodexErrorDetails { status?: number; code?: string; type?: string; planType?: string; resetsAt?: number }
+export interface CodexErrorDetails { status?: number; code?: string; type?: string; planType?: string; resetsAt?: number; message?: string }
 export interface AssistantMessage {
   role: "assistant"; content: (TextContent | ThinkingContent | ToolCall)[];
   api: string; provider: string; model: string; usage: Usage;

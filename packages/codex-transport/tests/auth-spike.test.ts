@@ -9,6 +9,8 @@ import {
   refreshOpenAISubscriptionCredential,
   refreshWithCredentialLease,
   planTypeFromAccessToken,
+  isOpenAISubscriptionRefreshRejected,
+  OpenAISubscriptionRefreshError,
   type OpenAISubscriptionCredential,
 } from "../src/oauth.js";
 
@@ -201,6 +203,28 @@ describe("OpenAI subscription auth", () => {
     ).rejects.toThrow("different ChatGPT account");
   });
 
+  it("tells a revoked login from a transient refresh failure", async () => {
+    const refreshWith = (response: Response | Error) =>
+      refreshOpenAISubscriptionCredential(originalCredential, {
+        attribution: FIELDWORK_ATTRIBUTION,
+        fetchFn: vi.fn<typeof fetch>().mockImplementation(async () => {
+          if (response instanceof Error) throw response;
+          return response;
+        }),
+      }).then(() => null, (error: unknown) => error);
+
+    const revoked = await refreshWith(jsonResponse({ error: "refresh_token_expired" }, 401));
+    expect(revoked).toBeInstanceOf(OpenAISubscriptionRefreshError);
+    expect(revoked).toMatchObject({ status: 401, message: "OpenAI subscription token refresh failed: HTTP 401 (refresh_token_expired)" });
+    for (const status of [400, 401, 403]) {
+      expect(isOpenAISubscriptionRefreshRejected(await refreshWith(new Response("", { status })))).toBe(true);
+    }
+    for (const status of [408, 429, 500, 503]) {
+      expect(isOpenAISubscriptionRefreshRejected(await refreshWith(new Response("", { status })))).toBe(false);
+    }
+    expect(isOpenAISubscriptionRefreshRejected(await refreshWith(new TypeError("fetch failed")))).toBe(false);
+  });
+
   it("bounds error responses and never reflects token-shaped error content", async () => {
     const oversized = vi
       .fn<typeof fetch>()
@@ -296,7 +320,7 @@ describe("OpenAI subscription auth", () => {
   it("validates custom attribution before any network request", async () => {
     const fetchMock = vi.fn<typeof fetch>();
     await expect(
-      loginOpenAISubscriptionDeviceCode({ attribution: FIELDWORK_ATTRIBUTION,
+      loginOpenAISubscriptionDeviceCode({
         fetchFn: fetchMock,
         attribution: { ...FIELDWORK_ATTRIBUTION, originator: "bad\nheader" },
         onVerification: () => {},

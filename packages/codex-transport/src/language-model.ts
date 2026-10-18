@@ -55,6 +55,14 @@ type SubscriptionProviderOptions = {
 export interface OpenAISubscriptionModelOptions extends CodexClientOptions {
   isModelImageMime?: (mime: string) => boolean;
   accessToken: string;
+  /**
+   * Called when the backend refuses `rejected` with HTTP 401 before answering,
+   * for the token to send instead: an access token can be revoked long before
+   * it expires. Each call renews at most once, and later calls on the model
+   * use the token it returned. Throwing fails the call with that error, which
+   * is how a refresh the token endpoint rejects reaches the caller.
+   */
+  renewAccessToken?: (rejected: string) => Promise<string>;
   modelId: string;
   runtime?: CodexRuntime;
   transport?: "sse" | "websocket" | "auto";
@@ -534,12 +542,21 @@ export class OpenAISubscriptionError extends Error {
   }
 }
 
+function unauthorized(message: AssistantMessage): boolean {
+  return message.stopReason === "error" && message.errorDetails?.status === 401;
+}
+
 export function createOpenAISubscriptionModel(
   config: OpenAISubscriptionModelOptions,
 ): LanguageModelV4 {
   if (!config.accessToken) throw new Error("OpenAI subscription access token is required");
   const runtime = config.runtime ?? new CodexClient(config);
   const model = codexModel(config.modelId);
+  let accessToken = config.accessToken;
+  async function renew(rejected: string): Promise<string> {
+    accessToken = await config.renewAccessToken!(rejected);
+    return accessToken;
+  }
 
   return {
     specificationVersion: "v4",
@@ -548,11 +565,12 @@ export function createOpenAISubscriptionModel(
     supportedUrls: {},
 
     async doGenerate(options) {
-      const message = await runtime.complete(
-        model,
-        toCodexContext(options.prompt, options.tools, config.modelId, config.isModelImageMime),
-        optionsOf(options, config.accessToken, config.transport),
-      );
+      const context = toCodexContext(options.prompt, options.tools, config.modelId, config.isModelImageMime);
+      const sent = accessToken;
+      let message = await runtime.complete(model, context, optionsOf(options, sent, config.transport));
+      if (config.renewAccessToken && unauthorized(message)) {
+        message = await runtime.complete(model, context, optionsOf(options, await renew(sent), config.transport));
+      }
       if (message.stopReason === "error" || message.stopReason === "aborted") {
         throw new OpenAISubscriptionError(message.errorMessage ?? `OpenAI subscription ${message.stopReason}`, message.errorDetails);
       }
@@ -564,20 +582,43 @@ export function createOpenAISubscriptionModel(
       const signal = options.abortSignal
         ? AbortSignal.any([options.abortSignal, cancellation.signal])
         : cancellation.signal;
-      const source = runtime.stream(
-        model,
-        toCodexContext(options.prompt, options.tools, config.modelId, config.isModelImageMime),
-        optionsOf(options, config.accessToken, config.transport, signal),
-      );
+      const context = toCodexContext(options.prompt, options.tools, config.modelId, config.isModelImageMime);
       const warnings = warningsOf(options);
+      // A refused token is refused before the response starts, so nothing has
+      // reached the caller and the request can be sent again as if for the first time.
+      let renewalFailure: { error: unknown } | undefined;
+      async function* events(): AsyncGenerator<AssistantMessageEvent> {
+        const sent = accessToken;
+        let started = false;
+        for await (const event of runtime.stream(model, context, optionsOf(options, sent, config.transport, signal))) {
+          if (!started && event.type === "error" && config.renewAccessToken && unauthorized(event.error)) {
+            let renewed: string;
+            try {
+              renewed = await renew(sent);
+            } catch (error) {
+              renewalFailure = { error };
+              return;
+            }
+            yield* runtime.stream(model, context, optionsOf(options, renewed, config.transport, signal));
+            return;
+          }
+          started = true;
+          yield event;
+        }
+      }
 
       return {
         stream: new ReadableStream<LanguageModelV4StreamPart>({
           async start(controller) {
             controller.enqueue({ type: "stream-start", warnings });
             try {
-              for await (const event of source) {
+              for await (const event of events()) {
                 for (const part of streamParts(event)) controller.enqueue(part);
+              }
+              if (renewalFailure) {
+                // Ends the call the way a backend failure does, with the renewal's own error.
+                controller.enqueue({ type: "error", error: renewalFailure.error });
+                controller.enqueue({ type: "finish", usage: usageOf(EMPTY_USAGE), finishReason: finishReasonOf("error"), providerMetadata: transportMetadata() });
               }
               controller.close();
             } catch (error) {

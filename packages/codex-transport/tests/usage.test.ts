@@ -105,6 +105,13 @@ describe("Codex subscription usage", () => {
           .mockResolvedValue(new Response("no", { status: 429 })),
       }),
     ).rejects.toThrow("HTTP 429");
+    await expect(
+      fetchCodexUsage({ attribution: FIELDWORK_ATTRIBUTION,
+        accessToken: "access-secret",
+        accountId: "account-123",
+        fetchFn: vi.fn<typeof fetch>().mockResolvedValue(new Response("", { status: 401 })),
+      }),
+    ).rejects.toMatchObject({ details: { status: 401 } });
     expect(() => parseCodexUsage([])).toThrow("not an object");
   });
 });

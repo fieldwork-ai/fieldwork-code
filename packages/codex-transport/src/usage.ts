@@ -1,4 +1,5 @@
 import type { OpenAISubscriptionAttribution } from "./oauth.js";
+import { CodexRequestError } from "./errors.js";
 
 import type {
   CodexUsageLimit,
@@ -133,7 +134,7 @@ export async function fetchCodexUsage(options: {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const text = await readBodyLimited(response);
-  if (!response.ok) throw new Error(`Codex usage request failed with HTTP ${response.status}`);
+  if (!response.ok) throw new CodexRequestError(`Codex usage request failed with HTTP ${response.status}`, { status: response.status });
   let value: unknown;
   try {
     value = JSON.parse(text);

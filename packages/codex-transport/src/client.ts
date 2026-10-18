@@ -1,19 +1,32 @@
 import { websocketEvents } from "./websocket.js";
+import { sanitizeErrorText } from "./sanitize.js";
 import { randomUUID, createHash } from "node:crypto";
 import { zstdCompressSync } from "node:zlib";
 import type { AssistantMessage, AssistantMessageEvent, CodexClientOptions, CodexErrorDetails, CodexRuntime, Context, ImageContent, Model, ProviderStreamOptions, TextContent, ToolCall } from "./client-types.js";
 
-export class CodexRequestError extends Error {
-  constructor(message: string, readonly details: CodexErrorDetails) { super(message); this.name = "CodexRequestError"; }
-}
+import { CodexRequestError } from "./errors.js";
+export { CodexRequestError };
 // A reasoning summary streams as numbered sections (`summary_index`) with no separator of their own;
 // a single newline would still render them as one markdown paragraph.
 const SUMMARY_SEPARATOR = "\n\n";
 const token = (value: unknown): string | undefined => typeof value === "string" ? value.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 100) || undefined : undefined;
-function errorDetailsOf(status: number | undefined, error: unknown): CodexErrorDetails {
+function errorDetailsOf(status: number | undefined, error: unknown, message?: unknown): CodexErrorDetails {
   const body = (error && typeof error === "object" ? error : {}) as { code?: unknown; type?: unknown; plan_type?: unknown; resets_at?: unknown };
   const resetsAt = typeof body.resets_at === "number" && Number.isFinite(body.resets_at) ? body.resets_at : undefined;
-  return { ...(status !== undefined && { status }), ...(token(body.code) && { code: token(body.code) }), ...(token(body.type) && { type: token(body.type) }), ...(token(body.plan_type) && { planType: token(body.plan_type) }), ...(resetsAt !== undefined && { resetsAt }) };
+  const text = typeof message === "string" ? sanitizeErrorText(message).slice(0, 500) || undefined : undefined;
+  return { ...(status !== undefined && { status }), ...(token(body.code) && { code: token(body.code) }), ...(token(body.type) && { type: token(body.type) }), ...(token(body.plan_type) && { planType: token(body.plan_type) }), ...(resetsAt !== undefined && { resetsAt }), ...(text && { message: text }) };
+}
+// The backend answers in two shapes: the Responses API's `{error: {message, type, code}}`, and
+// the ChatGPT backend's `{detail: "..."}`, which is how it refuses a model the account's plan
+// does not include. The second carries no type or code, so its text is all there is.
+function httpErrorMessageOf(body: { error?: unknown; detail?: unknown; message?: unknown } | null): unknown {
+  const error = body?.error as { message?: unknown } | string | undefined;
+  if (typeof error === "string") return error;
+  if (typeof error?.message === "string") return error.message;
+  const detail = body?.detail as { message?: unknown } | string | undefined;
+  if (typeof detail === "string") return detail;
+  if (typeof detail?.message === "string") return detail.message;
+  return body?.message;
 }
 
 export function normalizeCodexBaseUrl(value = "https://chatgpt.com/backend-api/codex"): string {
@@ -152,10 +165,10 @@ export class CodexClient implements CodexRuntime {
       } else {
         const response = await (this.config.fetchFn ?? fetch)(request.url, { method: "POST", headers: request.headers, body: request.body, signal: options.signal, redirect: "error" });
         if (!response.ok) {
-          const body = await response.json().catch(() => null) as { error?: unknown } | null;
-          const details = errorDetailsOf(response.status, body?.error);
+          const body = await response.json().catch(() => null) as { error?: unknown; detail?: unknown; message?: unknown } | null;
+          const details = errorDetailsOf(response.status, body?.error, httpErrorMessageOf(body));
           const label = details.type ?? details.code;
-          throw new CodexRequestError(`Codex request failed with HTTP ${response.status}${label ? ` (${label})` : ""}`, details);
+          throw new CodexRequestError(`Codex request failed with HTTP ${response.status}${label ? ` (${label})` : ""}${details.message ? `: ${details.message}` : ""}`, details);
         }
         if (!response.body) throw new Error("Codex response has no body");
         events = sse(response.body);
@@ -262,7 +275,7 @@ export class CodexClient implements CodexRuntime {
           }
         } else if (event.type === "response.failed" || event.type === "error") {
           const error = event.response?.error ?? event.error ?? event;
-          throw new CodexRequestError(`Codex ${error.code ?? "response.failed"}: ${error.message ?? "request failed"}`, errorDetailsOf(undefined, error));
+          throw new CodexRequestError(`Codex ${error.code ?? "response.failed"}: ${error.message ?? "request failed"}`, errorDetailsOf(undefined, error, error.message));
         } else if (event.type === "response.completed" || event.type === "response.incomplete") {
           const result = event.response ?? {};
           message.responseId = result.id ?? message.responseId;

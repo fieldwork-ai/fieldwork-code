@@ -1,5 +1,10 @@
 import type { CodexErrorDetails } from "./client-types.js";
 
+/** A failure the Codex backend reported, with what it said about it. */
+export class CodexRequestError extends Error {
+  constructor(message: string, readonly details: CodexErrorDetails) { super(message); this.name = "CodexRequestError"; }
+}
+
 export type OpenAISubscriptionUsageLimitType = "usage_limit_reached" | "usage_not_included";
 
 const USAGE_LIMIT_TYPES: readonly OpenAISubscriptionUsageLimitType[] = ["usage_limit_reached", "usage_not_included"];
