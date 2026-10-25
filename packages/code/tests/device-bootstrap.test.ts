@@ -17,6 +17,13 @@ it("waits for preparation, deduplicates notifications, and advertises capabiliti
   release("/working/conversation");
   await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
 });
+it("advertises chosen shells only when its host resolves them", async () => {
+  const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => stream([]));
+  vi.stubGlobal("fetch", fetcher);
+  runners.push(startDeviceRunner({ apiUrl: "https://example.test", roots: ["/working"], capabilities: ["terminals-v1"], getToken: async () => "token", resolveShell: () => { throw new Error("none"); } }));
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalled());
+  expect(new Headers(fetcher.mock.calls[0][1]?.headers).get("X-Runner-Capabilities")?.split(",")).toEqual(expect.arrayContaining(["terminals-v1", "command-shells-v1"]));
+});
 it("does not start after a rejected preparation or after shutdown", async () => {
   let release!: (root: string) => void;
   const fetcher = vi.fn(async () => stream([{ type: "start", session_id: "job", root: "/working/conversation" }]));

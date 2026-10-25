@@ -18,6 +18,25 @@ import { resolve } from 'node:path';
 export const runnerSignal = new AsyncLocalStorage<AbortSignal>();
 export const runnerRoots = new AsyncLocalStorage<readonly string[]>();
 
+/**
+ * A shell the computer offers its commands, by id (`command-shells-v1`): a
+ * Windows computer's Command Prompt, PowerShell or WSL distribution. The host
+ * that starts the runner resolves an id, only to a shell it found itself, and
+ * throws for any other; the runner never runs a program the request names.
+ */
+export interface CommandShell {
+  file: string;
+  /** `run` names this one run, for `stop`. */
+  args(command: string, cwd: string, run: string): string[];
+  env?(env: Record<string, string>, set: string[]): Record<string, string>;
+  /** Ends what a run left behind where killing its process tree does not reach (inside WSL). */
+  stop?(run: string): void;
+  /** Windows: `args` are the command line as is (cmd parses its own, not as Windows quotes arguments). */
+  verbatim?: boolean;
+}
+export const runnerShells = new AsyncLocalStorage<(id: string) => CommandShell>();
+export const COMMAND_SHELLS_CAPABILITY = 'command-shells-v1';
+
 export const WORKSPACE = process.env.HOME ?? homedir();
 
 /** The durable tier (ADR 20260810): the user's FSx volume, NFS-mounted by the
