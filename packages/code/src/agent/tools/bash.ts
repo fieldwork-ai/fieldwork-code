@@ -1,12 +1,15 @@
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
-import { resolveRoot, WORKSPACE, runnerSignal } from './workspace.js';
+import { randomUUID } from 'node:crypto';
+import { mkdir, stat } from 'node:fs/promises';
+import { resolveRoot, WORKSPACE, runnerSignal, runnerShells, type CommandShell } from './workspace.js';
 import { runnerShell } from './shell-session.js';
 
 interface BashParams {
   command: string;
   shell_session?: boolean;
   initial_cwd?: string;
+  /** The computer's shell, by id, which the runner's host resolves (`runnerShells`); the command then starts in `initial_cwd`. */
+  shell?: string;
   description?: string;
   timeout?: number;
   run_in_background?: boolean;
@@ -16,6 +19,13 @@ interface BashParams {
   env?: Record<string, string>;
 }
 
+/**
+ * On Windows `detached` starts a command with no console at all, and
+ * PowerShell and wsl.exe then exit without running or print nothing to the
+ * pipes. Process groups are a POSIX notion; Windows stops a command's tree
+ * with taskkill /T instead, so nothing is lost by keeping it attached.
+ */
+const WINDOWS = process.platform === 'win32';
 const DEFAULT_TIMEOUT = 300_000;
 const MAX_TIMEOUT = 1_800_000;
 const MAX_BUFFER = 10 * 1024 * 1024;
@@ -31,6 +41,8 @@ const FLUSH_GRACE_MS = 100;
  * kills everything anyway.
  */
 const backgroundGroups = new Map<string, Set<number>>();
+/** How to end what a background group left where its pid does not reach (a WSL run's Linux side), by pid. */
+const backgroundStops = new Map<number, () => void>();
 
 /** A foreground command still running, keyed by workdir so POST /interrupt can
  * kill exactly the command a stopped turn has in flight — and nothing a
@@ -81,6 +93,7 @@ export function liveBackgroundGroups(): number {
         live++;
       } catch {
         pids.delete(pid);
+        backgroundStops.delete(pid);
       }
     }
     if (pids.size === 0) backgroundGroups.delete(key);
@@ -103,6 +116,8 @@ export function reapBackground(workdir: string): { killed: number } {
       } catch {
         // already gone
       }
+      backgroundStops.get(pid)?.();
+      backgroundStops.delete(pid);
     }
     backgroundGroups.delete(key);
   }
@@ -145,15 +160,42 @@ export async function bash(params: BashParams) {
   }
   const signal = runnerSignal.getStore();
   if (signal?.aborted) return { success: false, error: "Terminal session interrupted" };
-  const childEnv = env || signal ? { ...process.env, ...env } : process.env;
+  let childEnv = env || signal ? { ...process.env, ...env } : process.env;
   if (signal) delete childEnv.FWCODE_TOKEN;
 
+  // A chosen shell starts in the command's directory itself: the POSIX `cd`
+  // prefix the app sends bash works in neither cmd nor PowerShell.
+  let shell: CommandShell | undefined;
+  let start = cwd;
+  const run = randomUUID();
+  if (params.shell !== undefined) {
+    const resolveShell = runnerShells.getStore();
+    if (!resolveShell) return { success: false, error: 'This computer cannot choose a shell; command was not run.' };
+    try { shell = resolveShell(params.shell); }
+    catch (error) { return { success: false, error: `${error instanceof Error ? error.message : 'Unknown shell'}; command was not run.` }; }
+    const initial = resolveRoot(params.initial_cwd ?? cwd);
+    if (!initial.ok) return { success: false, error: initial.error };
+    if (!await stat(initial.root).then((s) => s.isDirectory(), () => false)) return { success: false, error: `Directory not found: ${initial.root}; command was not run.` };
+    start = initial.root;
+    if (shell.env) {
+      const strings: Record<string, string> = {};
+      for (const [key, value] of Object.entries(childEnv)) if (value !== undefined) strings[key] = value;
+      childEnv = shell.env(strings, Object.keys(env ?? {}));
+    }
+  }
+  const file = shell ? shell.file : 'bash';
+  const args = shell ? shell.args(command, start, run) : ['-c', command];
+  const stopRun = shell?.stop?.bind(shell);
+  const stop = stopRun ? () => stopRun(run) : undefined;
+
   if (run_in_background) {
-    const child = spawn('bash', ['-c', command], {
-      detached: true,
+    const child = spawn(file, args, {
+      detached: !WINDOWS,
       stdio: 'ignore',
-      cwd,
+      cwd: start,
       env: childEnv,
+      windowsHide: true,
+      windowsVerbatimArguments: shell?.verbatim === true,
     });
     child.unref();
     if (child.pid) {
@@ -163,6 +205,7 @@ export async function bash(params: BashParams) {
         backgroundGroups.set(cwd, group);
       }
       group.add(child.pid);
+      if (stop) backgroundStops.set(child.pid, stop);
     }
     return { success: true, output: `Background PID: ${child.pid}` };
   }
@@ -173,11 +216,13 @@ export async function bash(params: BashParams) {
     // `detached` puts the command in its own process group, which is what makes
     // a timeout or a stop able to kill the whole tree rather than just the
     // shell. stdin is ignored so nothing can block waiting to read it.
-    const child = spawn('bash', ['-c', command], {
-      detached: true,
+    const child = spawn(file, args, {
+      detached: !WINDOWS,
       stdio: ['ignore', 'pipe', 'pipe'],
-      cwd,
+      cwd: start,
       env: childEnv,
+      windowsHide: true,
+      windowsVerbatimArguments: shell?.verbatim === true,
     });
     const pid = child.pid;
 
@@ -188,6 +233,7 @@ export async function bash(params: BashParams) {
     let ending: 'timeout' | 'overflow' | 'interrupt' | null = null;
 
     const killGroup = (): boolean => {
+      stop?.();
       if (pid === undefined) return false;
       try {
         killProcessGroup(pid);
@@ -329,6 +375,7 @@ export async function bash(params: BashParams) {
               backgroundGroups.set(cwd, orphans);
             }
             orphans.add(pid);
+            if (stop) backgroundStops.set(pid, stop);
           } catch {
             // group empty: nothing survived the command
           }

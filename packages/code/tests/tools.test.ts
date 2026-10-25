@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { read } from '../src/agent/tools/read.js';
 import { write } from '../src/agent/tools/write.js';
 import { edit } from '../src/agent/tools/edit.js';
 import { bash, liveBackgroundGroups, reapBackground } from '../src/agent/tools/bash.js';
-import { WORKSPACE } from '../src/agent/tools/workspace.js';
+import { WORKSPACE, runnerRoots, runnerShells, type CommandShell } from '../src/agent/tools/workspace.js';
 
 let tmp: string;
 
@@ -448,4 +448,42 @@ describe('rsvg-convert (SVG attachment rendering)', () => {
 
     expect(faded.equals(solid)).toBe(false);
   });
+});
+
+describe('bash in a chosen shell', () => {
+  const sh = (calls: string[]): CommandShell => ({
+    file: '/bin/sh',
+    args: (command, cwd, run) => ['-c', `echo "run=$RUN_SET cwd=$(pwd -P)"; ${command}`, run],
+    env: (env, set) => ({ ...env, RUN_SET: set.join(',') }),
+    stop: (run) => { calls.push(run); },
+  });
+
+  it('runs the command in the shell the host resolves, starting in initial_cwd', async () => {
+    const root = await realpath(tmp);
+    await mkdir(join(root, 'app'));
+    const calls: string[] = [];
+    const result = await runnerRoots.run([root], () => runnerShells.run((id) => { if (id !== 'pwsh') throw new Error('PowerShell 7 is not on this computer'); return sh(calls); },
+      () => bash({ command: 'exit 4', workdir: root, shell: 'pwsh', initial_cwd: join(root, 'app'), env: { FIELDWORK_X: '1' } })));
+    expect(result).toMatchObject({ success: true, exit_code: 4, stdout: `run=FIELDWORK_X cwd=${join(root, 'app')}\n` });
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses a shell it cannot resolve, and runs nothing', async () => {
+    const root = await realpath(tmp);
+    expect(await runnerRoots.run([root], () => bash({ command: `touch ${join(root, 'ran')}`, workdir: root, shell: 'pwsh' }))).toMatchObject({ success: false, error: 'This computer cannot choose a shell; command was not run.' });
+    expect(await runnerRoots.run([root], () => runnerShells.run(() => { throw new Error('PowerShell 7 is not on this computer'); }, () => bash({ command: `touch ${join(root, 'ran')}`, workdir: root, shell: 'pwsh' }))))
+      .toMatchObject({ success: false, error: 'PowerShell 7 is not on this computer; command was not run.' });
+    expect(await runnerRoots.run([root], () => runnerShells.run(() => sh([]), () => bash({ command: 'true', workdir: root, shell: 'pwsh', initial_cwd: join(root, 'missing') }))))
+      .toMatchObject({ success: false, error: expect.stringContaining('Directory not found') });
+    await expect(readFile(join(root, 'ran'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('stops what the run left where its process tree does not reach, on a timeout', async () => {
+    const root = await realpath(tmp);
+    const calls: string[] = [];
+    const result = await runnerRoots.run([root], () => runnerShells.run(() => sh(calls), () => bash({ command: 'sleep 10', workdir: root, shell: 'wsl:Ubuntu', timeout: 300 })));
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('timeout') });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatch(/^[0-9a-f-]{36}$/);
+  }, 10000);
 });

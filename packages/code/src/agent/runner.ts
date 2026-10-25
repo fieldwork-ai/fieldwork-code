@@ -1,11 +1,11 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { routes } from "./router.js";
-import { runnerRoots, runnerSignal, resolveRoot } from "./tools/workspace.js";
+import { runnerRoots, runnerSignal, runnerShells, resolveRoot, COMMAND_SHELLS_CAPABILITY, type CommandShell } from "./tools/workspace.js";
 import { interruptForeground, reapBackground } from "./tools/bash.js";
 import { runnerShell, ShellSessionManager, PERSISTENT_SHELL_CAPABILITY } from "./tools/shell-session.js";
 
 export interface ConnectionOptions { apiUrl: string; getToken: () => Promise<string>; onStatus?: (online: boolean) => void; streamIdleMs?: number }
-export interface RunnerOptions extends ConnectionOptions { sessionId: string; roots: string[]; reconnect?: boolean; onClose?: () => void; shellManager?: ShellSessionManager }
+export interface RunnerOptions extends ConnectionOptions { sessionId: string; roots: string[]; reconnect?: boolean; onClose?: () => void; shellManager?: ShellSessionManager; resolveShell?: (id: string) => CommandShell }
 /**
  * The server writes a heartbeat every 5 seconds. A connection can die without
  * either end seeing it, and the socket may take many minutes to say so, so a
@@ -89,7 +89,8 @@ export function startRunner(options: RunnerOptions): { stop: () => void } {
               const checked = resolveRoot(params.workdir);
               if (!checked.ok) return { success: false, error: checked.error };
               try {
-                const execute = () => runnerSignal.run(callSignal, () => routes[`POST ${route}`]({ ...params, workdir: checked.root }));
+                const call = () => runnerSignal.run(callSignal, () => routes[`POST ${route}`]({ ...params, workdir: checked.root }));
+                const execute = () => options.resolveShell ? runnerShells.run(options.resolveShell, call) : call();
                 return await (options.shellManager
                   ? runnerShell.run({ manager: options.shellManager, key: options.sessionId, root: checked.root }, execute)
                   : execute());
@@ -124,10 +125,12 @@ export interface DeviceRunnerOptions extends ConnectionOptions {
   prepareJob?: (frame: Record<string, unknown>, signal: AbortSignal) => Promise<string>;
   onControl?: (frame: Record<string, unknown>, signal: AbortSignal) => Promise<void>;
   capabilities?: string[];
+  /** The shells this computer offers its commands by id; given, the runner advertises `command-shells-v1`. */
+  resolveShell?: (id: string) => CommandShell;
 }
 export function startDeviceRunner(options: DeviceRunnerOptions): { stop: () => void } {
   const shellManager = process.platform === 'darwin' ? new ShellSessionManager() : undefined;
-  const capabilities = [...(options.capabilities ?? []), ...(shellManager ? [PERSISTENT_SHELL_CAPABILITY] : [])];
+  const capabilities = [...(options.capabilities ?? []), ...(shellManager ? [PERSISTENT_SHELL_CAPABILITY] : []), ...(options.resolveShell ? [COMMAND_SHELLS_CAPABILITY] : [])];
   const lifetime = new AbortController(), jobs = new Map<string, ReturnType<typeof startRunner>>();
   const preparing = new Set<string>(), controls = new Set<string>();
   void (async () => {
