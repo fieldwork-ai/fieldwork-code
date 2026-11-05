@@ -1,3 +1,7 @@
+# 0.1.10
+
+Route `gpt-6.1-terra` through the ChatGPT subscription. GPT-6.1 Terra (released 2026-10-26) is the Fieldwork app's no-reasoning Instant level.
+
 # 0.1.9
 
 Renew a refused access token once and send the request again. ChatGPT can revoke an access token long before it expires, and every request then failed with HTTP 401 until the token's expiry finally prompted a refresh, days later. `createOpenAISubscriptionModel` takes an optional `renewAccessToken(rejected)`: on a 401 that arrives before the response starts, it asks for a new token, retries once, and keeps the new token for later calls on the model. A renewal that throws fails the call with its own error.
