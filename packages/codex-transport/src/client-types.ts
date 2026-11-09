@@ -1,6 +1,9 @@
 import type { OpenAISubscriptionAttribution } from "./oauth.js";
 export interface TextContent { type: "text"; text: string }
 export interface ImageContent { type: "image"; data: string; mimeType: string }
+export type UserContent = TextContent | ImageContent | DocumentContent;
+/** A PDF, sent as an `input_file`: the backend reads its text and renders its pages for vision. */
+export interface DocumentContent { type: "document"; data: string; mimeType: "application/pdf"; filename: string }
 export interface ThinkingContent { type: "thinking"; thinking: string; thinkingSignature?: string }
 export interface ToolCall { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown>; thoughtSignature?: string }
 export interface Usage {
@@ -21,8 +24,8 @@ export interface AssistantMessage {
   stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
   timestamp: number; responseId?: string; responseModel?: string; errorMessage?: string; errorDetails?: CodexErrorDetails;
 }
-export interface ToolResultMessage { role: "toolResult"; toolCallId: string; toolName: string; content: (TextContent | ImageContent)[]; isError: boolean; timestamp: number }
-export type Message = AssistantMessage | ToolResultMessage | { role: "user"; content: string | (TextContent | ImageContent)[]; timestamp: number };
+export interface ToolResultMessage { role: "toolResult"; toolCallId: string; toolName: string; content: UserContent[]; isError: boolean; timestamp: number }
+export type Message = AssistantMessage | ToolResultMessage | { role: "user"; content: string | UserContent[]; timestamp: number };
 export interface Tool { name: string; description: string; parameters: Record<string, unknown> }
 export interface Context { systemPrompt?: string; messages: Message[]; tools?: Tool[] }
 export interface Model<T extends string = string> {

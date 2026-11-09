@@ -288,10 +288,10 @@ describe("OpenAI subscription transport", () => {
                   {
                     type: "file",
                     data: { type: "data", data: "cGRm" },
-                    mediaType: "application/pdf",
-                    filename: "report.pdf",
+                    mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    filename: "report.docx",
                   },
-                  { type: "text", text: "report.pdf (pages 1-2 of 2)" },
+                  { type: "text", text: "report.docx" },
                 ],
               },
             },
@@ -307,9 +307,9 @@ describe("OpenAI subscription transport", () => {
       content: [
         {
           type: "text",
-          text: "[report.pdf (application/pdf) omitted: this model reads text and images only]",
+          text: "[report.docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document) omitted: this model reads text, images and PDFs only]",
         },
-        { type: "text", text: "report.pdf (pages 1-2 of 2)" },
+        { type: "text", text: "report.docx" },
       ],
     });
   });
