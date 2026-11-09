@@ -3,13 +3,13 @@ import {
   type AssistantMessageEvent,
   type CodexErrorDetails,
   type Context,
-  type ImageContent,
   type CodexRuntime,
   type Message,
   type Model,
   type ProviderStreamOptions,
   type TextContent,
   type Tool,
+  type UserContent,
   type ToolResultMessage,
   type Usage,
 } from "./client-types.js";
@@ -112,16 +112,16 @@ function base64(data: string | Uint8Array): string {
  *
  * The server rebuilds the prompt from stored messages on every turn, so a throw
  * here does not fail one request — it bricks the conversation for good, whatever
- * the user types next. The transport carries text and images and nothing else
- * (Codex's Responses converter emits only `input_text` and `input_image`, for
- * user and tool-result content alike), so anything else degrades to a note that
- * tells the model what it cannot see.
+ * the user types next. The transport carries text, images and PDFs (as
+ * `input_file`, in user and tool-result content alike; the Codex CLI's own
+ * converter emits only text and images, but the backend reads PDFs), so anything
+ * else degrades to a note that tells the model what it cannot see.
  */
 function unsupportedNote(what: string): TextContent {
-  return { type: "text", text: `[${what} omitted: this model reads text and images only]` };
+  return { type: "text", text: `[${what} omitted: this model reads text, images and PDFs only]` };
 }
 
-type SubscriptionContent = TextContent | ImageContent;
+type SubscriptionContent = UserContent;
 
 function fileContentOf(part: {
   data: SharedV4FileData;
@@ -136,6 +136,9 @@ function fileContentOf(part: {
   // URL and provider-reference files are never resolved here: the projection
   // runs on every turn and must stay free of network I/O.
   if (part.data.type !== "data") return unsupportedNote(label);
+  if (part.mediaType === "application/pdf") {
+    return { type: "document", data: base64(part.data.data), mimeType: "application/pdf", filename: part.filename || "document.pdf" };
+  }
   if (!isModelImageMime(part.mediaType)) return unsupportedNote(label);
   return { type: "image", data: base64(part.data.data), mimeType: part.mediaType };
 }

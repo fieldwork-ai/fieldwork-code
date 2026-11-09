@@ -2,6 +2,7 @@ const FIELDWORK_ATTRIBUTION = { originator: "fieldwork", userAgent: "fieldwork/0
 import { describe, expect, it } from "vitest";
 import type { LanguageModelV4CallOptions } from "@ai-sdk/provider";
 import { toCodexContext } from "../src/language-model.js";
+import { responsesInput } from "../src/client.js";
 
 /**
  * The projection runs on every turn against stored messages, so a throw here is
@@ -60,7 +61,7 @@ describe("openai subscription projection", () => {
     });
   });
 
-  it("degrades a PDF tool result to a note rather than throwing", () => {
+  it("sends a PDF tool result as a document", () => {
     const context = project(
       toolResultPrompt({
         type: "content",
@@ -76,12 +77,19 @@ describe("openai subscription projection", () => {
       }),
     );
 
-    const result = context.messages.at(-1);
-    expect(result).toMatchObject({ role: "toolResult", isError: false });
-    expect(result).toMatchObject({
+    expect(context.messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      isError: false,
       content: [
-        { type: "text", text: expect.stringContaining("invoice.pdf (application/pdf)") },
+        { type: "document", data: "JVBERi0=", mimeType: "application/pdf", filename: "invoice.pdf" },
         { type: "text", text: "invoice.pdf" },
+      ],
+    });
+    expect(responsesInput(context).at(-1)).toMatchObject({
+      type: "function_call_output",
+      output: [
+        { type: "input_file", filename: "invoice.pdf", file_data: "data:application/pdf;base64,JVBERi0=" },
+        { type: "input_text", text: "invoice.pdf" },
       ],
     });
   });
@@ -128,7 +136,7 @@ describe("openai subscription projection", () => {
     });
   });
 
-  it("sends an image attachment and degrades a PDF attachment", () => {
+  it("sends an image attachment and a PDF attachment", () => {
     const context = project([
       {
         role: "user",
@@ -150,8 +158,34 @@ describe("openai subscription projection", () => {
       content: [
         { type: "text", text: "what is in these?" },
         { type: "image", data: "QUJD", mimeType: "image/png" },
-        { type: "text", text: expect.stringContaining("invoice.pdf (application/pdf)") },
+        { type: "document", data: "JVBERi0=", mimeType: "application/pdf", filename: "invoice.pdf" },
       ],
+    });
+    expect(responsesInput(context)[0]).toEqual({
+      role: "user",
+      content: [
+        { type: "input_text", text: "what is in these?" },
+        { type: "input_image", image_url: "data:image/png;base64,QUJD" },
+        { type: "input_file", filename: "invoice.pdf", file_data: "data:application/pdf;base64,JVBERi0=" },
+      ],
+    });
+  });
+
+  it("names an unnamed PDF, which the backend requires", () => {
+    const context = project([
+      { role: "user", content: [{ type: "file", data: { type: "data", data: new Uint8Array([37, 80, 68, 70]) }, mediaType: "application/pdf" }] },
+    ]);
+    expect(context.messages[0]).toMatchObject({
+      content: [{ type: "document", data: "JVBERg==", filename: "document.pdf" }],
+    });
+  });
+
+  it("degrades a URL-backed PDF, which the projection may not fetch", () => {
+    const context = project([
+      { role: "user", content: [{ type: "file", data: { type: "url", url: new URL("https://example.com/a.pdf") }, mediaType: "application/pdf" }] },
+    ]);
+    expect(context.messages[0]).toMatchObject({
+      content: [{ type: "text", text: expect.stringContaining("application/pdf") }],
     });
   });
 

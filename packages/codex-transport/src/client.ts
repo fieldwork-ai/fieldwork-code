@@ -2,7 +2,7 @@ import { websocketEvents } from "./websocket.js";
 import { sanitizeErrorText } from "./sanitize.js";
 import { randomUUID, createHash } from "node:crypto";
 import { zstdCompressSync } from "node:zlib";
-import type { AssistantMessage, AssistantMessageEvent, CodexClientOptions, CodexErrorDetails, CodexRuntime, Context, ImageContent, Model, ProviderStreamOptions, TextContent, ToolCall } from "./client-types.js";
+import type { AssistantMessage, AssistantMessageEvent, CodexClientOptions, CodexErrorDetails, CodexRuntime, Context, Model, ProviderStreamOptions, ToolCall, UserContent } from "./client-types.js";
 
 import { CodexRequestError } from "./errors.js";
 export { CodexRequestError };
@@ -49,8 +49,12 @@ function accountOf(token: string): string {
   } catch { /* The credential is validated by the service, not by JWT decoding. */ }
   throw new Error("ChatGPT account ID is required");
 }
-function contentOf(content: (TextContent | ImageContent)[]) {
-  return content.map(part => part.type === "text" ? { type: "input_text", text: part.text } : { type: "input_image", image_url: `data:${part.mimeType};base64,${part.data}` });
+function contentOf(content: UserContent[]) {
+  return content.map(part => {
+    if (part.type === "text") return { type: "input_text", text: part.text };
+    if (part.type === "image") return { type: "input_image", image_url: `data:${part.mimeType};base64,${part.data}` };
+    return { type: "input_file", filename: part.filename, file_data: `data:${part.mimeType};base64,${part.data}` };
+  });
 }
 function callId(id: string) { return id.split("|")[0]; }
 export function responsesInput(context: Context): Record<string, unknown>[] {

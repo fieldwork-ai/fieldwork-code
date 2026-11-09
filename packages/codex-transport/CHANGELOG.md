@@ -1,3 +1,7 @@
+# 0.1.11
+
+Send PDFs. A PDF file part, in user content or a tool result, now goes to the backend as an `input_file` instead of a note saying it was omitted. The Codex CLI's own converter emits only text and images, which is where the omission came from, but the ChatGPT backend reads PDFs: it extracts the text and renders the pages for vision, so a scanned invoice with no text layer reads too. An unnamed PDF is sent as `document.pdf`, since the backend requires a filename. The backend refuses a corrupt PDF with HTTP 400, as the OpenAI API does, so a caller replaying stored content should only store PDFs it has checked.
+
 # 0.1.10
 
 Route `gpt-6.1-terra` through the ChatGPT subscription. GPT-6.1 Terra (released 2026-10-26) is the Fieldwork app's no-reasoning Instant level.
