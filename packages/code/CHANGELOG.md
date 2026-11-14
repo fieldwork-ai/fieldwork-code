@@ -1,3 +1,11 @@
+# 0.26.0
+
+Take a control (archive, cleanup) while other conversations are at work. A device runner took one only when nothing on the computer was running or preparing, because it closed every persistent shell first; with several conversations open that moment rarely came, and archived conversations kept their worktrees for days. A control frame's `session_id` now names the conversation's runner session: the runner closes that session's shells alone, and holds the control only while that session is preparing or running, which the server asks again about. A `start` no longer waits for controls either; the host already holds a conversation's preparation until its own teardown ends. A control without `session_id` closes no shells.
+
+Upstream the desktop's patch on 0.25.0. `startDeviceRunner` returns `reconnect()`, which redials a device stream waiting out its backoff at once (a live stream is left alone). A conversation stream started with `reconnect: false` also comes back from a stream the network cut (a `TypeError` or `AbortError` from the connection), not only from one that went quiet.
+
+Needs a server that sends `session_id` on control frames for the shells to close; without it, nothing else changes.
+
 # 0.25.0
 
 Run a desktop runner's commands in the shell the computer chose, on Windows: Command Prompt, Windows PowerShell, PowerShell 7 or a WSL distribution. A request's `shell` names one by id and the command starts in `initial_cwd`; the runner's host resolves the id through `DeviceRunnerOptions.resolveShell` (a `CommandShell`: the program, its arguments, its environment and how to stop a run where killing its process tree does not reach), and a runner given one advertises `command-shells-v1`. A request naming a shell the host cannot resolve, or on a runner without one, runs nothing and says why. Without `shell`, commands run in `bash -c` as before.
