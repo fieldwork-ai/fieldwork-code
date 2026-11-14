@@ -42,23 +42,28 @@ it("legacy devices reject directories they did not authorize", async () => {
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
 
-it("defers jobs during maintenance and maintenance during jobs", async () => {
+// Maintenance waited for the whole computer to go idle, so with any conversation at work it never came.
+it("runs maintenance beside other conversations' jobs, but not beside its own session's", async () => {
   let streamController!: ReadableStreamDefaultController<Uint8Array>, release!: () => void;
   const fetcher = vi.fn(async (url: string) => url.endsWith("/api/runners/events")
     ? new Response(new ReadableStream({ start(c) { streamController = c; } }), { headers: { "Content-Type": "text/event-stream" } })
     : stream([{ type: "ready", connection_id: "connection" }]));
   vi.stubGlobal("fetch", fetcher);
-  const onControl = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));
+  const onControl = vi.fn((_frame: Record<string, unknown>) => new Promise<void>(resolve => { release = resolve; }));
   runners.push(startDeviceRunner({ apiUrl: "https://example.test", roots: ["/working"], getToken: async () => "token", onControl }));
   await vi.waitFor(() => expect(streamController).toBeDefined());
   const emit = (frame: object) => streamController.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
-  emit({ type: "control", id: "cleanup" });
+  emit({ type: "control", id: "cleanup", session_id: "gone" });
   await vi.waitFor(() => expect(onControl).toHaveBeenCalledOnce());
-  emit({ type: "start", session_id: "job", root: "/working" });
-  await new Promise(resolve => setTimeout(resolve, 20)); expect(fetcher).toHaveBeenCalledTimes(1);
-  release(); await new Promise(resolve => setTimeout(resolve, 20));
+  // Another conversation's job starts while that maintenance runs.
   emit({ type: "start", session_id: "job", root: "/working" });
   await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
-  emit({ type: "control", id: "cleanup-again" });
+  // The same conversation's maintenance is not asked twice at once.
+  emit({ type: "control", id: "cleanup", session_id: "gone" });
+  // Nor run beside its own session's job; the server asks again.
+  emit({ type: "control", id: "busy", session_id: "job" });
   await new Promise(resolve => setTimeout(resolve, 20)); expect(onControl).toHaveBeenCalledOnce();
+  release(); await new Promise(resolve => setTimeout(resolve, 20));
+  emit({ type: "control", id: "idle", session_id: "other" });
+  await vi.waitFor(() => expect(onControl.mock.calls.map(([frame]) => frame.id)).toEqual(["cleanup", "idle"]));
 });

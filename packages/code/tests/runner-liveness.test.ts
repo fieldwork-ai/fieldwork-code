@@ -82,3 +82,47 @@ it("ends a session that does not reconnect when the server ends its stream", asy
   await new Promise(resolve => setTimeout(resolve, 400));
   expect(api.attempts(path)).toBe(1);
 });
+
+it("brings back a session that does not reconnect once the network cuts its stream", async () => {
+  const api = await server((_req, res, attempt) => {
+    sse(res, { type: "ready", connection_id: `connection-${attempt}` });
+    if (attempt === 1) setTimeout(() => res.socket?.destroy(), 50);
+  });
+  const runner = startRunner({ apiUrl: api.apiUrl, roots: ["/tmp"], getToken: async () => "token", sessionId: "s1", reconnect: false });
+  cleanups.push(() => runner.stop());
+  await vi.waitFor(() => expect(api.attempts("/api/runner-sessions/s1/events")).toBe(2), { timeout: 5_000 });
+});
+
+it("dials the device stream again at once when told the network is back", async () => {
+  const at: number[] = [];
+  const api = await server((_req, res, attempt) => {
+    at.push(Date.now());
+    if (attempt < 4) res.socket?.destroy();
+    else sse(res, { type: "ready" });
+  });
+  const runner = startDeviceRunner({ apiUrl: api.apiUrl, roots: [], getToken: async () => "token" });
+  cleanups.push(() => runner.stop());
+  // Three failures in: the next try is 4 s away.
+  await vi.waitFor(() => expect(at).toHaveLength(3), { timeout: 8_000 });
+  const failedAt = at[2];
+  // A reconnect while the third dial is still in flight is rightly a no-op, so keep saying the network is back until it dials.
+  await vi.waitFor(() => { runner.reconnect(); expect(at).toHaveLength(4); }, { timeout: 1_500, interval: 50 });
+  expect(at[3] - failedAt).toBeLessThan(2_000);
+}, 15_000);
+
+// Archiving waited for the whole computer to be idle, so with any conversation at work it never came.
+it("takes a control while another conversation is at work, but not while its own session prepares", async () => {
+  const api = await server((_req, res) => {
+    sse(res, { type: "ready" });
+    sse(res, { type: "start", session_id: "busy", root: "/tmp/busy" });
+    setTimeout(() => {
+      sse(res, { type: "control", id: "conv-busy", operation: "archive", session_id: "busy" });
+      sse(res, { type: "control", id: "conv-idle", operation: "archive", session_id: "idle" });
+    }, 50);
+  });
+  const controlled: unknown[] = [];
+  // A preparation that never ends: the other conversation is mid-turn for the whole test.
+  const runner = startDeviceRunner({ apiUrl: api.apiUrl, roots: [], getToken: async () => "token", prepareJob: () => new Promise(() => {}), onControl: async frame => { controlled.push(frame.id); } });
+  cleanups.push(() => runner.stop());
+  await vi.waitFor(() => expect(controlled).toEqual(["conv-idle"]), { timeout: 3_000 });
+});

@@ -106,10 +106,11 @@ export function startRunner(options: RunnerOptions): { stop: () => void } {
         for (const root of options.roots) interruptForeground(root);
       }
       if (lifetime.signal.aborted) break;
-      // A runner that does not reconnect still comes back from a stream it gave
-      // up on itself, since the server cannot know that one died and holds the
-      // session for it. It retries until the server answers: a new stream, or a refusal.
-      if (failure instanceof StreamStalled) recovering = true;
+      // A runner that does not reconnect still comes back from a stream it lost,
+      // gone quiet or cut by the network, since the server cannot know that one
+      // died and holds the session for it. It retries until the server answers:
+      // a new stream, or a refusal.
+      if (failure instanceof StreamStalled || failure instanceof TypeError || (failure as Error | undefined)?.name === "AbortError") recovering = true;
       else if (failure instanceof HttpError) recovering = false;
       if (options.reconnect === false && !recovering) break;
       await delay(Math.min(30_000, 1000 * 2 ** attempts++), undefined, { signal: lifetime.signal }).catch(() => {});
@@ -128,23 +129,27 @@ export interface DeviceRunnerOptions extends ConnectionOptions {
   /** The shells this computer offers its commands by id; given, the runner advertises `command-shells-v1`. */
   resolveShell?: (id: string) => CommandShell;
 }
-export function startDeviceRunner(options: DeviceRunnerOptions): { stop: () => void } {
+export function startDeviceRunner(options: DeviceRunnerOptions): { stop: () => void; reconnect: () => void } {
   const shellManager = process.platform === 'darwin' ? new ShellSessionManager() : undefined;
   const capabilities = [...(options.capabilities ?? []), ...(shellManager ? [PERSISTENT_SHELL_CAPABILITY] : []), ...(options.resolveShell ? [COMMAND_SHELLS_CAPABILITY] : [])];
   const lifetime = new AbortController(), jobs = new Map<string, ReturnType<typeof startRunner>>();
   const preparing = new Set<string>(), controls = new Set<string>();
+  let attempts = 0, wake: AbortController | undefined;
   void (async () => {
-    let attempts = 0;
     while (!lifetime.signal.aborted) {
       try {
         await events(options, "/api/runners/events", lifetime.signal, { headers: { "X-Runner-Capabilities": capabilities.join(",") } }, frame => {
           if (frame.type === "ready") { attempts = 0; options.onStatus?.(true); return; }
           if (frame.type === "heartbeat") return;
           if (frame.type === "control" && typeof frame.id === "string" && options.onControl) {
-            const id = frame.id;
-            if (!jobs.size && !preparing.size && !controls.has(id) && controls.size < 16) {
+            // A control comes only for a conversation nothing runs in, and the host holds
+            // that conversation's next preparation until it ends; waiting for the whole
+            // computer to go idle starved it. Its own session still preparing is the one
+            // overlap, and the server asks again.
+            const id = frame.id, own = typeof frame.session_id === "string" ? frame.session_id : undefined;
+            if (!(own && (preparing.has(own) || jobs.has(own))) && !controls.has(id) && controls.size < 16) {
               controls.add(id);
-              shellManager?.close();
+              if (own) shellManager?.dispose(own);
               void options.onControl(frame, lifetime.signal).catch(() => {}).finally(() => controls.delete(id));
             }
             return;
@@ -152,7 +157,7 @@ export function startDeviceRunner(options: DeviceRunnerOptions): { stop: () => v
           if (frame.type !== "start" || typeof frame.session_id !== "string" || typeof frame.root !== "string") throw new Error("Invalid job notification");
           const id = frame.session_id, root = frame.root;
           if (!options.prepareJob && !options.roots.includes(root)) throw new Error("Invalid job notification");
-          if (!controls.size && !jobs.has(id) && !preparing.has(id) && preparing.size < 16) {
+          if (!jobs.has(id) && !preparing.has(id) && preparing.size < 16) {
             preparing.add(id);
             void (async () => {
               const checked = options.prepareJob ? await options.prepareJob(frame, lifetime.signal) : root;
@@ -163,8 +168,13 @@ export function startDeviceRunner(options: DeviceRunnerOptions): { stop: () => v
           }
         });
       } catch {} finally { shellManager?.close(); options.onStatus?.(false); }
-      await delay(Math.min(30_000, 1000 * 2 ** attempts++), undefined, { signal: lifetime.signal }).catch(() => {});
+      wake = new AbortController();
+      await delay(Math.min(30_000, 1000 * 2 ** attempts++), undefined, { signal: AbortSignal.any([lifetime.signal, wake.signal]) }).catch(() => {});
     }
   })();
-  return { stop() { lifetime.abort(); for (const job of jobs.values()) job.stop(); jobs.clear(); shellManager?.close(); } };
+  return {
+    stop() { lifetime.abort(); for (const job of jobs.values()) job.stop(); jobs.clear(); shellManager?.close(); },
+    // A live stream is left alone (dropping it interrupts running commands); a dead one goes quiet and is redialed.
+    reconnect() { attempts = 0; wake?.abort(); },
+  };
 }
