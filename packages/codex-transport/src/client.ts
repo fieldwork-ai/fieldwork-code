@@ -102,15 +102,19 @@ export function buildCodexRequest(model: Model, context: Context, options: Provi
   headers.set("x-codex-routing-hint", `model=${model.id}${options.serviceTier ? `;tier=${options.serviceTier}` : ""}`);
   const input = responsesInput(context);
   const tools = (context.tools ?? []).map(tool => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.parameters, strict: false }));
+  // The system prompt leads `input` as a developer message, as Codex sends it, and never rides
+  // top-level `instructions`: from GPT-6.2 the backend appends those after `input`, outside the
+  // cached prefix, so a prompt sent there is billed in full on every call.
+  const prefix: Record<string, unknown>[] = [];
+  const namespace = uuidV5("6ba7b812-9dad-11d1-80b4-00c04fd430c8", threadId);
   if (config.responsesLite) {
     headers.set("x-openai-internal-codex-responses-lite", "true");
-    const namespace = uuidV5("6ba7b812-9dad-11d1-80b4-00c04fd430c8", threadId);
-    const prefix: Record<string, unknown>[] = [{ type: "additional_tools", id: `at_${uuidV5(namespace, JSON.stringify(tools))}`, role: "developer", tools }];
-    if (context.systemPrompt) prefix.push({ type: "message", id: `msg_${uuidV5(namespace, context.systemPrompt)}`, role: "developer", content: [{ type: "input_text", text: context.systemPrompt }] });
-    input.unshift(...prefix);
+    prefix.push({ type: "additional_tools", id: `at_${uuidV5(namespace, JSON.stringify(tools))}`, role: "developer", tools });
   }
+  if (context.systemPrompt) prefix.push({ type: "message", ...(config.responsesLite ? { id: `msg_${uuidV5(namespace, context.systemPrompt)}` } : {}), role: "developer", content: [{ type: "input_text", text: context.systemPrompt }] });
+  input.unshift(...prefix);
   const payload = {
-    model: model.id, instructions: config.responsesLite ? "" : context.systemPrompt ?? "", input,
+    model: model.id, instructions: "", input,
     ...(!config.responsesLite ? { tools } : {}), tool_choice: "auto", parallel_tool_calls: !config.responsesLite,
     reasoning: { effort: options.reasoningEffort ?? "medium", summary: options.reasoningSummary ?? "auto" },
     store: false, stream: true, include: ["reasoning.encrypted_content"],
