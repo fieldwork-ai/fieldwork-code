@@ -70,7 +70,12 @@ describe("Codex Rust protocol contract", () => {
     expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(Object.fromEntries(request.headers)).toMatchObject({ authorization: "Bearer secret", "chatgpt-account-id": "account-test", originator: "test-client", "user-agent": "test-client/1", "session-id": "session", "thread-id": "thread", "x-client-request-id": "thread", "x-codex-routing-hint": "model=gpt-5.6-luna;tier=priority", "x-openai-fedramp": "true", "content-encoding": "zstd" });
     expect(JSON.parse(zstdDecompressSync(request.body as Uint8Array).toString())).toEqual(request.payload);
-    expect(request.payload).toMatchObject({ store: false, stream: true, instructions: "Be helpful", include: ["reasoning.encrypted_content"], prompt_cache_key: "session" });
+    expect(request.payload).toMatchObject({ store: false, stream: true, instructions: "", include: ["reasoning.encrypted_content"], prompt_cache_key: "session" });
+    expect(request.payload.input).toEqual([
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "Be helpful" }] },
+      { role: "user", content: [{ type: "input_text", text: "Hello" }] },
+    ]);
+    expect(buildCodexRequest(model, { messages: context.messages }, { apiKey: "secret" }, config).payload.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "Hello" }] }]);
     expect(normalizeCodexBaseUrl("https://chatgpt.com/backend-api/")).toBe("https://chatgpt.com/backend-api/codex");
     expect(() => normalizeCodexBaseUrl("http://evil.example")).toThrow("HTTPS");
   });

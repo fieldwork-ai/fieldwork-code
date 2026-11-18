@@ -15,6 +15,8 @@ export const OPENAI_SUBSCRIPTION_MAX_OUTPUT_TOKENS = 128_000;
 
 
 export const OPENAI_SUBSCRIPTION_MODEL_ID_LIST = [
+  "gpt-6.2-astra",
+  "gpt-6.2-sol",
   "gpt-6-astra",
   "gpt-6.1-sol",
   "gpt-6.1-terra",

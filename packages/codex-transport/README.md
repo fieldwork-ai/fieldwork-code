@@ -19,7 +19,7 @@ Pass the model to the AI SDK's `generateText` or `streamText`. Subscription cred
 
 `createOpenAISubscriptionModel` projects messages into a portable context and uses `CodexClient.complete` / `stream`. The client follows Codex's Responses request contract: account and attribution headers, session and thread headers, model/tier routing, encrypted reasoning replay, `store: false`, and zstd compression. SSE is the default, including `transport: 'auto'`; explicit `transport: 'websocket'` uses the same event decoder over Responses WebSockets. Requests can be aborted with the SDK's `abortSignal`. The `provider` identity remains `openai-subscription`, including reasoning metadata saved by earlier clients.
 
-Optional client settings are `fedramp`, `responsesLite`, `compression`, `baseUrl`, and `fetchFn`. Responses-lite emits stable per-thread prefix IDs, puts tools into an `additional_tools` item, and moves instructions into the input. It is opt-in. No conversation history or tool execution loop lives here.
+Optional client settings are `fedramp`, `responsesLite`, `compression`, `baseUrl`, and `fetchFn`. The system prompt always leads `input` as a developer message and `instructions` is sent empty, because from GPT-6.2 the backend places `instructions` after `input`, where it cannot be cached. Responses-lite also emits stable per-thread prefix IDs and puts tools into an `additional_tools` item. It is opt-in. No conversation history or tool execution loop lives here.
 
 Images default to PNG, JPEG, GIF and WebP; callers can narrow this with `isModelImageMime`. Unsupported files, foreign reasoning, and provider-specific content degrade without throwing on a stored conversation. URLs are never fetched during projection.
 
